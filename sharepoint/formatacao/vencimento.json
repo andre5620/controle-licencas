@@ -1,0 +1,27 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {
+    "display": "=if(toString(@currentField) == '', 'none', 'flex')",
+    "align-items": "center"
+  },
+  "children": [
+    {
+      "elmType": "span",
+      "txtContent": "=toLocaleDateString(@currentField)"
+    },
+    {
+      "elmType": "span",
+      "style": {
+        "padding": "1px 8px",
+        "border-radius": "12px",
+        "font-size": "11px",
+        "font-weight": "600",
+        "background-color": "=if(floor((Number(@currentField) - Number(@now)) / 86400000) < 0, '#FDECEC', if(floor((Number(@currentField) - Number(@now)) / 86400000) <= 120, '#FEF3E4', '#EAF6E9'))",
+        "color": "=if(floor((Number(@currentField) - Number(@now)) / 86400000) < 0, '#B8332E', if(floor((Number(@currentField) - Number(@now)) / 86400000) <= 120, '#B07417', '#357A2B'))",
+        "margin-left": "8px"
+      },
+      "txtContent": "=if(floor((Number(@currentField) - Number(@now)) / 86400000) < 0, 'Vencida há ' + toString(abs(floor((Number(@currentField) - Number(@now)) / 86400000))) + 'd', 'Vence em ' + toString(floor((Number(@currentField) - Number(@now)) / 86400000)) + 'd')"
+    }
+  ]
+}

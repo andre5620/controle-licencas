@@ -1,0 +1,93 @@
+# Publica o Controle de Licenças no Azure a cada push na branch main.
+# Autenticação por OIDC (identidade federada do Entra): nenhuma senha no GitHub.
+#
+# Variáveis do repositório (Settings > Secrets and variables > Actions > Variables):
+#   AZURE_CLIENT_ID        ID do app de deploy no Entra (com credencial federada)
+#   AZURE_TENANT_ID        ID do tenant da Solinftec
+#   AZURE_SUBSCRIPTION_ID  ID da assinatura
+#   AZURE_RESOURCE_GROUP   Grupo de recursos (ex.: rg-controle-licencas)
+#   FUNCTION_APP_NAME      Saída "functionAppName" do Bicep
+#   STATIC_WEB_APP_NAME    Saída "staticWebAppName" do Bicep
+
+name: Publicar Controle de Licenças
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'azure/**', '.github/workflows/azure-deploy.yml' ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # necessário para o login OIDC
+  contents: read
+
+concurrency:
+  group: azure-deploy
+  cancel-in-progress: false
+
+jobs:
+  testar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Instalar dependências
+        working-directory: azure/api
+        run: npm ci || npm install
+      - name: Emulador do Table Storage (Azurite)
+        run: |
+          npx --yes -p azurite@3.33.0 azurite-table --silent --location /tmp/azurite &
+          sleep 5
+      - name: Testes da API
+        working-directory: azure/api
+        env: { AZURITE_CONN: 'UseDevelopmentStorage=true' }
+        run: npm test
+
+  publicar:
+    needs: testar
+    runs-on: ubuntu-latest
+    environment: producao
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Login no Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Infraestrutura (Bicep)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az deployment group create \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --template-file azure/infra/main.bicep \
+              --parameters azure/infra/main.bicepparam
+
+      - name: Empacotar API
+        working-directory: azure/api
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Publicar API (Azure Functions)
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ vars.FUNCTION_APP_NAME }}
+          package: azure/api
+          sku: flexconsumption
+
+      - name: Publicar site (Static Web Apps)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            npm install -g @azure/static-web-apps-cli@2.0.2
+            TOKEN=$(az staticwebapp secrets list \
+              --name "${{ vars.STATIC_WEB_APP_NAME }}" \
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+              --query properties.apiKey -o tsv)
+            echo "::add-mask::$TOKEN"
+            swa deploy azure/web --env production --deployment-token "$TOKEN"

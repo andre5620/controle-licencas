@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controle de Licenças Regulatórias — Solinftec</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<div class="wave"></div>
+<header>
+  <div class="header-inner">
+    <div class="brandmark">
+      <svg class="diamond" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="20,2 36,14 20,38 4,14" fill="none"/>
+        <polygon points="20,2 20,20 4,14" fill="var(--red)"/>
+        <polygon points="20,2 36,14 20,20" fill="var(--amber)"/>
+        <polygon points="4,14 20,20 20,38" fill="var(--green)"/>
+        <polygon points="20,20 36,14 20,38" fill="var(--teal)"/>
+      </svg>
+      <div>
+        <div class="brand-title">Controle de Licenças Regulatórias</div>
+        <div class="brand-sub">Solinftec · Governança Ambiental &amp; Regulatória</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span class="today-chip" id="todayChip"></span>
+      <span class="save-state"><span class="save-dot" id="saveDot"></span><span id="saveText">carregando...</span></span>
+      <span class="today-chip" id="userChip" hidden></span>
+      <a class="btn btn-ghost" href="/.auth/logout">Sair</a>
+      <button class="btn btn-accent" id="btnExport">Exportar relatório</button>
+      <button class="btn btn-primary" id="btnNewLic">+ Nova licença</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <div class="filters">
+    <select id="fUnidade"><option value="">Todas as unidades</option></select>
+    <select id="fStatus"><option value="">Todos os status</option></select>
+    <select id="fRisco"><option value="">Todos os riscos</option></select>
+    <input type="text" id="fBusca" placeholder="Buscar por ID, tipo, órgão emissor...">
+    <div class="spacer"></div>
+    <div class="view-switch" role="group" aria-label="Visualização">
+      <button class="view-btn active" id="btnListView" type="button">Lista</button>
+      <button class="view-btn" id="btnGanttView" type="button">Gantt</button>
+    </div>
+    <button class="btn btn-ghost" id="btnClearFilters" style="border:1px solid var(--line);">Limpar filtros</button>
+  </div>
+
+  <div class="panel-switch" role="group" aria-label="Painel principal">
+    <button class="view-btn active" id="btnLicensePanel" type="button">Por licença</button>
+    <button class="view-btn" id="btnUnitPanel" type="button">Por unidade</button>
+  </div>
+  <div id="licList"></div>
+  <div id="unitPanel" hidden></div>
+  <div id="ganttView" hidden></div>
+</main>
+
+<footer class="app-footer">
+  Dados carregados a partir de "CONTROLE DE LICENÇAS REGULATÓRIAS — SOLINFTEC". As edições ficam salvas para todos os colegas com acesso. Validação final das informações regulatórias é sempre humana, conforme normas vigentes.
+  <span class="app-version" id="appVersion"></span>
+</footer>
+
+<!-- Modal: nova licença -->
+<div class="overlay" id="overlayNewLic">
+  <div class="modal">
+    <h3>Nova licença</h3>
+    <div class="field-grid">
+      <div class="field"><label>ID</label><input id="nl_id" placeholder="L-014"></div>
+      <div class="field"><label>Unidade</label><input id="nl_unidade" placeholder="Fábrica"></div>
+      <div class="field"><label>Cidade</label><input id="nl_cidade"></div>
+      <div class="field"><label>UF</label><input id="nl_uf" maxlength="2" style="text-transform:uppercase"></div>
+      <div class="field wide"><label>Razão Social</label><input id="nl_razao"></div>
+      <div class="field wide"><label>Categoria</label><input id="nl_categoria" placeholder="Licenciamento Ambiental"></div>
+      <div class="field"><label>Órgão Emissor</label><input id="nl_orgao"></div>
+      <div class="field"><label>Tipo de Licença</label><input id="nl_tipo"></div>
+      <div class="field">
+        <label>Risco</label>
+        <select id="nl_risco"><option>NA</option><option>Baixo</option><option>Médio</option><option>Alto</option></select>
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <select id="nl_status"><option>Pendente</option><option>Condicionada</option><option>Obtida</option><option>Dispensada</option></select>
+      </div>
+      <div class="field"><label>Data de Emissão</label><input type="date" id="nl_emissao"></div>
+      <div class="field"><label>Vencimento</label><input type="date" id="nl_vencimento"></div>
+      <div class="field full"><label>Notas</label><textarea id="nl_notes"></textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="btnCancelNewLic">Cancelar</button>
+      <button class="btn btn-primary" id="btnSaveNewLic">Criar licença</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- ===================== PRINT REPORT AREA ===================== -->
+<div id="print-area"></div>
+
+<script src="data/fluxo.js"></script>
+<script src="data/licencas_planilha.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {
+    "display": "=if(@currentField == '', 'none', 'inline-block')",
+    "padding": "2px 10px",
+    "border-radius": "12px",
+    "font-weight": "600",
+    "font-size": "12px",
+    "background-color": "=if(@currentField == 'Obtida', '#EAF6E9', if(@currentField == 'Condicionada', '#EAF3FB', if(@currentField == 'Pendente', '#FDF3E3', if(@currentField == 'Dispensada', '#EFEFEF', '#EFEFEF'))))",
+    "color": "=if(@currentField == 'Obtida', '#357A2B', if(@currentField == 'Condicionada', '#2261A6', if(@currentField == 'Pendente', '#9A6A0B', if(@currentField == 'Dispensada', '#5B6472', '#5B6472'))))"
+  },
+  "txtContent": "@currentField"
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+  "elmType": "div",
+  "style": {
+    "display": "=if(@currentField == '', 'none', 'inline-block')",
+    "padding": "2px 10px",
+    "border-radius": "12px",
+    "font-weight": "600",
+    "font-size": "12px",
+    "background-color": "=if(@currentField == 'Concluído', '#EAF6E9', if(@currentField == 'Em andamento', '#FEF3E4', if(@currentField == 'Travado', '#FDECEC', if(@currentField == 'Não iniciado', '#EFEFEF', '#EFEFEF'))))",
+    "color": "=if(@currentField == 'Concluído', '#357A2B', if(@currentField == 'Em andamento', '#B07417', if(@currentField == 'Travado', '#B8332E', if(@currentField == 'Não iniciado', '#5B6472', '#5B6472'))))"
+  },
+  "txtContent": "@currentField"
+}
