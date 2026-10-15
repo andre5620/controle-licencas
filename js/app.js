@@ -3,7 +3,7 @@ const DEFAULT_MODEL = window.DEFAULT_MODEL || null;
 const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 const PROFILE_FIELDS = [
   ['Razão social', 'razaoSocial'], ['CNPJ', 'cnpj'], ['Endereço', 'endereco'],
   ['Atividade ambiental', 'atividadeAmbiental'], ['Atividades conduzidas', 'atividadesConduzidas'],
@@ -509,6 +509,7 @@ function renderUnitDetail(id){
       <h1 tabindex="-1" id="unitDetailTitle">${esc(unit.nome || unit.codigo)}</h1>
       <p>${esc(unit.cidade)} / ${esc(unit.uf)}</p></div>
       <div class="unit-actions"><button class="btn" data-edit-unit="${esc(unit.id)}">Editar unidade</button>
+        <button class="btn btn-danger" data-delete-unit="${esc(unit.id)}">Excluir unidade</button>
         <button class="btn btn-primary" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
     </header>
     <div class="unit-detail-summary">
@@ -574,6 +575,9 @@ function renderUnitPanel(list){
 }
 
 function attachUnitPanelEvents(){
+  document.querySelectorAll('[data-delete-unit]').forEach(button=>button.addEventListener('click', ()=>{
+    void deleteUnit(button.dataset.deleteUnit);
+  }));
   document.querySelectorAll('[data-back-units]').forEach(button=>button.addEventListener('click', ()=>navigatePanel('#units')));
   document.querySelectorAll('[data-edit-unit]').forEach(button=>button.addEventListener('click', ()=>{
     openUnitEditor(button.dataset.editUnit);
@@ -581,6 +585,30 @@ function attachUnitPanelEvents(){
   document.querySelectorAll('[data-new-unit-license]').forEach(button=>button.addEventListener('click', ()=>{
     openNewLicense(button.dataset.newUnitLicense);
   }));
+}
+
+async function deleteUnit(id){
+  const unit = MODEL.units.find(item=>item.id === id);
+  if(!unit){
+    showToast('A unidade não está mais disponível. Carregue o servidor.');
+    return false;
+  }
+  if(DATA.some(lic=>lic.unidadeId === id)){
+    showToast('Não é possível excluir: a unidade possui licenças vinculadas. Remova ou transfira as licenças antes.');
+    return false;
+  }
+  if(!confirm(`Excluir a unidade "${unit.nome || unit.codigo}" para todos os colaboradores? O perfil, as obrigações, o fluxo e os vínculos de comprovantes serão removidos. Arquivos no OneDrive não serão apagados.`)){
+    return false;
+  }
+  MODEL.units = MODEL.units.filter(item=>item.id !== id);
+  if(document.getElementById('fUnidade').value === (unit.nome || unit.codigo)){
+    document.getElementById('fUnidade').value = '';
+  }
+  const saving = saveData();
+  navigatePanel('#units');
+  const saved = await saving;
+  showToast(saved ? 'Unidade excluída' : 'Exclusão local pendente de sincronização');
+  return saved;
 }
 
 function dateMs(iso){

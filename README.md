@@ -37,6 +37,8 @@ O painel abre em **Por unidade**. O cadastro e independente das licencas: unidad
 
 Os cards exibem um resumo. Use **Abrir unidade** para acessar uma pagina completa com perfil, indicadores, comprovantes do OneDrive, obrigacoes ambientais, fluxo padrao e todas as licencas da unidade. Edicao de perfil, criacao de licenca e edicao de atividades continuam disponiveis nessa pagina.
 
+Na pagina completa, **Excluir unidade** remove o cadastro apos confirmacao, somente se nao houver licencas vinculadas (independentemente dos filtros). Remova ou transfira as licencas antes de excluir. A exclusao afeta todos os colaboradores e remove perfil, obrigacoes, fluxo e vinculos de comprovantes da unidade, mas nunca apaga arquivos do OneDrive. Unidades do catalogo inicial excluidas nao sao recriadas ao recarregar; **Restaurar dados** pode restaura-las. Em caso de falha de rede, a exclusao fica pendente neste navegador e pode ser reenviada por **Sincronizar**; conflitos continuam protegidos pelo controle de versao.
+
 Cada unidade tem um link direto no formato `Controle_Licencas_Solinftec.html#unit=ID`. E possivel compartilhar esse endereco, recarregar a pagina e usar Voltar/Avancar do navegador sem perder a unidade selecionada. O acesso continua exigindo login e permissao na organizacao; um ID inexistente mostra uma mensagem, sem abrir outra unidade. **Voltar as unidades** retorna aos cards, preservando os filtros da lista.
 
 Na pagina completa, os filtros e indicadores globais ficam ocultos: os indicadores sao calculados somente para a unidade e suas licencas nao ficam limitadas pelos filtros da lista anterior. Os cards de licenca podem ser expandidos nessa mesma tela. Nao ha mudanca no armazenamento ou necessidade de migracao SQL.

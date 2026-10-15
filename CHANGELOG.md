@@ -2,6 +2,13 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.10.0] - 2026-10-15
+
+### Exclusão de unidades
+
+- Exclusão pela página completa, com confirmação e bloqueio enquanto houver licenças vinculadas.
+- Preservação dos arquivos no OneDrive e tratamento de pendências e conflitos na sincronização.
+
 ## [1.9.0] - 2026-10-15
 
 ### Páginas de unidades

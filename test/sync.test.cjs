@@ -671,3 +671,65 @@ test('cards sao resumos com links diretos sem carregar formularios e comprovante
   assert.match(html, /Abrir unidade/);
   assert.doesNotMatch(html, /evidence-section|Perfil completo da unidade|class="lic-body"/);
 });
+
+test('exclusao de unidade com licencas e bloqueada mesmo com filtros ativos', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run('MODEL = modelFromLegacyData([window.DEFAULT_DATA[0]]); DATA = flattenModel(MODEL);');
+  app.element('fBusca').value = 'Nao encontra nada';
+  app.context.confirm = ()=>assert.fail('Nao deve confirmar exclusao bloqueada');
+  assert.equal(await app.run('deleteUnit(MODEL.units[0].id)'), false);
+  assert.equal(app.run('MODEL.units.length'), 1);
+  assert.match(app.element('toast').textContent, /possui licenças vinculadas/);
+});
+
+test('cancelar exclusao preserva perfil e comprovantes', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run("MODEL.units.push({id:'U-X',nome:'Teste',profile:{area:'10'},evidenceLinks:[{name:'Pasta',url:'https://1drv.ms/f/x'}]});");
+  app.context.confirm = ()=>false;
+  assert.equal(await app.run("deleteUnit('U-X')"), false);
+  assert.equal(app.run('MODEL.units[0].profile.area'), '10');
+  assert.equal(app.run('MODEL.units[0].evidenceLinks.length'), 1);
+});
+
+test('unidade inicial excluida nao reaparece apos salvar e recarregar', async ()=>{
+  let stored;
+  const app = createApp({withCatalog:true, service:{
+    save: async model=>{ stored = structuredClone(model); return 3; }
+  }});
+  await app.run('loadData()');
+  app.element('fUnidade').value = 'Fábrica';
+  assert.equal(await app.run("deleteUnit(MODEL.units.find(u=>u.nome === 'Fábrica').id)"), true);
+  assert.equal(app.run('MODEL.units.length'), 7);
+  assert.equal(app.element('fUnidade').value, '');
+  assert.equal(app.run('window.location.hash'), '#units');
+  const next = createApp({withCatalog:true, service:{
+    load: async ()=>({model:structuredClone(stored),revision:3,organizationId:'org-1'})
+  }});
+  await next.run('loadData()');
+  assert.equal(next.run('MODEL.units.length'), 7);
+  assert.equal(next.run("MODEL.units.some(u=>u.nome === 'Fábrica')"), false);
+});
+
+test('falha de rede ao excluir preserva rascunho e nao anuncia sucesso', async ()=>{
+  const app = createApp({service:{save:async()=>{throw new Error('Offline');}}});
+  await app.run('loadData()');
+  app.run("MODEL.units.push({id:'U-X',nome:'Teste'});");
+  assert.equal(await app.run("deleteUnit('U-X')"), false);
+  assert.equal(app.run('pendingChanges'), true);
+  assert.match(app.element('toast').textContent, /pendente/);
+  const cache = JSON.parse(app.storage.get('licencas-solinftec-v1:user-1:org-1'));
+  assert.equal(cache.model.units.length, 0);
+  assert.equal(cache.pending, true);
+});
+
+test('exclusao concorrente nao sobrescreve licenca adicionada no servidor', async ()=>{
+  const app = createApp({service:{save:async()=>{throw {code:'40001',message:'Conflito'};}}});
+  await app.run('loadData()');
+  app.run("MODEL.units.push({id:'U-X',nome:'Teste'});");
+  assert.equal(await app.run("deleteUnit('U-X')"), false);
+  assert.equal(app.run('conflict'), true);
+  assert.equal(app.run('pendingChanges'), true);
+  assert.match(app.element('syncMessage').textContent, /Outra pessoa/);
+});
