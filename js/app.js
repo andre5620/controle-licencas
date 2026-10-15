@@ -3,7 +3,13 @@ const DEFAULT_MODEL = window.DEFAULT_MODEL || null;
 const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
+const PROFILE_FIELDS = [
+  ['Razão social', 'razaoSocial'], ['CNPJ', 'cnpj'], ['Endereço', 'endereco'],
+  ['Atividade ambiental', 'atividadeAmbiental'], ['Atividades conduzidas', 'atividadesConduzidas'],
+  ['Ocupação', 'ocupacao'], ['Área', 'area'], ['Extintores', 'extintores'],
+  ['Hidrantes', 'hidrantes'], ['SPDA', 'spda'], ['Sistema de alarme', 'alarme']
+];
 const STORAGE_KEY = 'licencas-solinftec-v1';
 let MODEL = null;
 let DATA = [];
@@ -113,9 +119,9 @@ function modelFromLegacyData(records){
         id: previous?.id || nextId('U', previousUnits, units),
         codigo: previous?.codigo || record.unidade,
         nome: previous?.nome || record.unidade,
-        razaoSocial: record.razaoSocial || '',
-        cnpj: record.cnpj || '',
-        endereco: record.endereco || '',
+        razaoSocial: previous?.razaoSocial ?? record.razaoSocial ?? '',
+        cnpj: previous?.cnpj ?? record.cnpj ?? '',
+        endereco: previous?.endereco ?? record.endereco ?? '',
         cidade: previous?.cidade || record.cidade || '',
         uf: previous?.uf || record.uf || '',
         caracteristicasOperacionais: previous?.caracteristicasOperacionais || '',
@@ -458,6 +464,7 @@ function render(){
   }
   root.innerHTML = list.map(lic=>renderCard(lic)).join('');
   attachCardEvents();
+  attachEvidenceEvents(root);
 }
 
 function renderUnitPanel(list){
@@ -488,10 +495,15 @@ function renderUnitPanel(list){
       <div class="unit-summary"><span><strong>${licenses.length}</strong> processos</span><span><strong>${unit.environmentalLicenses?.length || 0}</strong> obrigações</span><span><strong>${done}/${activityTotal}</strong> etapas concluídas</span></div>
       <div class="unit-actions"><button class="btn" data-open-unit="${esc(name)}">Ver licenças</button><button class="btn" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
       <div class="unit-profile-strip"><span><b>Razão social</b>${esc(profile.razaoSocial || sample.razaoSocial || 'Não informado')}</span><span><b>Atividade</b>${esc(profile.atividadesConduzidas || 'Não informado')}</span><span><b>Área</b>${esc(profile.area || 'Não informado')}</span></div>
+      <details class="standard-flow"><summary>Perfil completo da unidade</summary>
+        ${renderUnitProfile({perfilUnidade: profile})}
+      </details>
+      ${renderEvidence('unit', unit)}
       <div class="unit-processes"><div class="section-label">Processos da unidade</div>${licenses.map(lic=>`<button class="unit-process" data-open-license="${esc(lic.id)}"><span><strong>${esc(lic.tipoLicenca || lic.categoria || 'Processo')}</strong><small>${esc(lic.id)} · ${esc(lic.status || 'Sem status')}</small></span><span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status || '—')}</span></button>`).join('') || '<p>Nenhuma licença cadastrada.</p>'}</div>
     </article>`;
   }).join('')}</div>`;
   attachUnitPanelEvents();
+  attachEvidenceEvents(root);
 }
 
 function attachUnitPanelEvents(){
@@ -580,6 +592,7 @@ function renderCard(lic){
     <div class="lic-body">
       ${renderFields(lic)}
         ${renderUnitProfile(lic)}
+      ${renderEvidence('license', lic)}
       ${renderActivities(lic)}
       ${lic.notes?`<div class="notes-box">📝 ${esc(lic.notes)}</div>`:''}
       <div class="card-footer">
@@ -618,19 +631,7 @@ function renderUnitProfile(lic){
   const profile = lic.perfilUnidade || {};
   const licenses = lic.licencasUnidade || [];
   const flow = lic.fluxoPadrao || [];
-  const fields = [
-    ['Razão social', 'razaoSocial'],
-    ['CNPJ', 'cnpj'],
-    ['Endereço', 'endereco'],
-    ['Atividade ambiental', 'atividadeAmbiental'],
-    ['Atividades conduzidas', 'atividadesConduzidas'],
-    ['Ocupação', 'ocupacao'],
-    ['Área', 'area'],
-    ['Extintores', 'extintores'],
-    ['Hidrantes', 'hidrantes'],
-    ['SPDA', 'spda'],
-    ['Sistema de alarme', 'alarme']
-  ].filter(([, key])=>profile[key]);
+  const fields = PROFILE_FIELDS.filter(([, key])=>profile[key]);
   if(!fields.length) return '';
   return `<div class="section-label">Perfil da unidade</div>
     <div class="field-grid unit-profile">
@@ -670,6 +671,112 @@ function renderActivities(lic){
 function esc(s){
   return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+function oneDriveUrl(value){
+  let url;
+  try{
+    url = new URL(value);
+  }catch{
+    throw new Error('Informe um link válido do OneDrive.');
+  }
+  const host = url.hostname.toLowerCase();
+  if(url.protocol !== 'https:' || url.username || url.password || url.port
+    || !(host === '1drv.ms' || host === 'onedrive.live.com'
+      || host.endsWith('.sharepoint.com'))){
+    throw new Error('Use um link HTTPS do OneDrive (1drv.ms, onedrive.live.com ou sua organização em sharepoint.com).');
+  }
+  return url.href;
+}
+
+function renderEvidence(scope, record){
+  const links = record.evidenceLinks || [];
+  const rows = links.map((link, index)=>{
+    let anchor;
+    try{
+      anchor = `<a href="${esc(oneDriveUrl(link.url))}" target="_blank" rel="noopener noreferrer">${esc(link.name)}</a>`;
+    }catch{
+      anchor = `<span>${esc(link.name)} — link inválido; edite o vínculo.</span>`;
+    }
+    return `<li>${anchor}<div class="unit-actions">
+      <button class="btn" data-evidence-edit="${index}" data-scope="${scope}" data-record="${esc(record.id)}">Editar</button>
+      <button class="btn btn-danger" data-evidence-delete="${index}" data-scope="${scope}" data-record="${esc(record.id)}">Remover vínculo</button>
+    </div></li>`;
+  }).join('');
+  return `<section class="evidence-section"><div class="section-label">Comprovantes · OneDrive</div>
+    ${links.length ? `<ul class="evidence-list">${rows}</ul>` : '<p>Nenhum comprovante vinculado.</p>'}
+    <button class="btn" data-evidence-add data-scope="${scope}" data-record="${esc(record.id)}">+ Vincular comprovante</button>
+  </section>`;
+}
+
+let evidenceTarget = null;
+
+function evidenceRecord(scope, id){
+  return (scope === 'unit' ? MODEL.units : DATA).find(record=>record.id === id);
+}
+
+function openEvidenceEditor(scope, id, index = null){
+  const record = evidenceRecord(scope, id);
+  if(!record){ showToast('O registro não está mais disponível. Carregue o servidor.'); return; }
+  const link = index === null ? null : record.evidenceLinks?.[index];
+  if(index !== null && !link){ showToast('O vínculo não está mais disponível.'); return; }
+  evidenceTarget = {scope, id, index};
+  document.getElementById('evidenceTitle').textContent = scope === 'unit'
+    ? 'Comprovante da unidade · OneDrive' : 'Comprovante da licença · OneDrive';
+  document.getElementById('evidenceName').value = link?.name || '';
+  document.getElementById('evidenceUrl').value = link?.url || '';
+  document.getElementById('evidenceError').hidden = true;
+  openModal('overlayEvidence');
+}
+
+function attachEvidenceEvents(root){
+  root.querySelectorAll('[data-evidence-add], [data-evidence-edit]').forEach(button=>{
+    button.addEventListener('click', ()=>openEvidenceEditor(button.dataset.scope,
+      button.dataset.record, button.hasAttribute('data-evidence-edit') ? Number(button.dataset.evidenceEdit) : null));
+  });
+  root.querySelectorAll('[data-evidence-delete]').forEach(button=>{
+    button.addEventListener('click', async ()=>{
+      const record = evidenceRecord(button.dataset.scope, button.dataset.record);
+      const index = Number(button.dataset.evidenceDelete);
+      if(!record?.evidenceLinks?.[index]){ showToast('O vínculo não está mais disponível.'); return; }
+      if(!confirm('Remover este vínculo para todos os colaboradores? O arquivo não será excluído do OneDrive.')) return;
+      record.evidenceLinks.splice(index, 1);
+      const saving = saveData();
+      render();
+      showToast(await saving ? 'Vínculo removido' : 'Remoção pendente de sincronização');
+    });
+  });
+}
+
+document.getElementById('evidenceForm').addEventListener('submit', async event=>{
+  event.preventDefault();
+  const error = document.getElementById('evidenceError');
+  try{
+    if(!evidenceTarget) throw new Error('Selecione uma unidade ou licença para vincular o comprovante.');
+    const record = evidenceRecord(evidenceTarget.scope, evidenceTarget.id);
+    if(!record) throw new Error('O registro não está mais disponível. Feche esta janela e carregue o servidor.');
+    const name = document.getElementById('evidenceName').value.trim();
+    if(!name) throw new Error('Informe um nome para o comprovante.');
+    const url = oneDriveUrl(document.getElementById('evidenceUrl').value.trim());
+    const links = record.evidenceLinks || [];
+    if(links.some((link, index)=>index !== evidenceTarget.index && link.url === url)){
+      throw new Error('Este link já está vinculado a este registro.');
+    }
+    if(evidenceTarget.index === null) links.push({name, url});
+    else{
+      if(!links[evidenceTarget.index]) throw new Error('O vínculo não está mais disponível.');
+      links[evidenceTarget.index] = {...links[evidenceTarget.index], name, url};
+    }
+    record.evidenceLinks = links;
+  }catch(cause){
+    error.textContent = cause.message;
+    error.hidden = false;
+    return;
+  }
+  const saving = saveData();
+  closeModal('overlayEvidence');
+  render();
+  showToast(await saving ? 'Comprovante vinculado' : 'Vínculo salvo localmente; sincronização pendente');
+});
 
 /* ---------------------------------------------------------------
    EVENTS
@@ -807,6 +914,12 @@ function openUnitEditor(id = null){
   document.getElementById('un_uf').innerHTML = '<option value="">Selecione</option>'
     + BRAZIL_UFS.map(uf=>`<option>${uf}</option>`).join('');
   document.getElementById('un_uf').value = unit?.uf || '';
+  document.getElementById('unitProfileFields').innerHTML = PROFILE_FIELDS.map(([label, key])=>
+    `<div class="field"><label for="up_${key}">${label}</label><input id="up_${key}"></div>`
+  ).join('');
+  PROFILE_FIELDS.forEach(([, key])=>{
+    document.getElementById(`up_${key}`).value = unit?.profile?.[key] ?? unit?.[key] ?? '';
+  });
   document.getElementById('unitError').hidden = true;
   openModal('overlayUnit');
 }
@@ -833,17 +946,26 @@ document.getElementById('unitForm').addEventListener('submit', async event=>{
     fail('A unidade não está mais disponível. Feche esta janela e carregue o servidor.');
     return;
   }
+  const profile = {...unit?.profile};
+  PROFILE_FIELDS.forEach(([, key])=>{
+    profile[key] = document.getElementById(`up_${key}`).value.trim();
+  });
   if(unit){
     const oldName = unit.nome;
-    Object.assign(unit, {nome, codigo: nome, cidade, uf});
+    Object.assign(unit, {nome, codigo: nome, cidade, uf, profile,
+      razaoSocial: profile.razaoSocial, cnpj: profile.cnpj, endereco: profile.endereco});
     DATA.forEach(lic=>{
-      if(lic.unidadeId === unit.id) Object.assign(lic, {unidade: nome, cidade, uf});
+      if(lic.unidadeId === unit.id) Object.assign(lic, {
+        unidade: nome, cidade, uf, razaoSocial: profile.razaoSocial,
+        cnpj: profile.cnpj, endereco: profile.endereco, perfilUnidade: profile
+      });
     });
     if(document.getElementById('fUnidade').value === oldName){
       document.getElementById('fUnidade').value = '';
     }
   }else{
-    unit = {id: `U-${crypto.randomUUID()}`, nome, codigo: nome, cidade, uf, status: 'Ativa'};
+    unit = {id: `U-${crypto.randomUUID()}`, nome, codigo: nome, cidade, uf, status: 'Ativa',
+      profile, razaoSocial: profile.razaoSocial, cnpj: profile.cnpj, endereco: profile.endereco};
     MODEL.units.push(unit);
   }
   const saving = saveData();
@@ -1095,7 +1217,7 @@ function setAppReady(ready){
 
 function refreshWhenIdle(){
   if(document.hidden || document.activeElement?.matches('input, textarea, select')
-    || document.querySelector('#overlayNewLic.show, #overlayUnit.show')) return;
+    || document.querySelector('#overlayNewLic.show, #overlayUnit.show, #overlayEvidence.show')) return;
   void refreshFromServer();
 }
 

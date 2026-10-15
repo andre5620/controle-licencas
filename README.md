@@ -39,6 +39,16 @@ O catalogo inicial de `data/fluxo.js` contem oito unidades: Fabrica, NY Tower, C
 
 Use **+ Nova unidade** para cadastrar nome, cidade e UF e **Editar unidade** no card para corrigir esses campos. Nomes repetidos nao sao aceitos. As licencas vinculadas passam a exibir o novo nome/localidade sem perder o vinculo com o ID da unidade.
 
+Em **Editar unidade**, tambem e possivel alterar o perfil completo: razao social, CNPJ, endereco, atividade ambiental, atividades conduzidas, ocupacao, area, extintores, hidrantes, SPDA e alarme. O perfil completo pode ser consultado no proprio card da visao por unidade. Valores apagados permanecem vazios, sem restaurar os dados da planilha. A edicao preserva campos adicionais e atualiza razao social, CNPJ e endereco nas licencas vinculadas.
+
+### Comprovantes do OneDrive
+
+Na unidade e no card de cada licenca, use **+ Vincular comprovante**. Informe um nome e cole o link de um arquivo ou pasta existente no OneDrive. Cada registro pode ter varios vinculos independentes, que podem ser editados, abertos em nova aba e removidos. Remover um vinculo NAO exclui o arquivo.
+
+Sao aceitos links HTTPS de `1drv.ms`, `onedrive.live.com` e subdominios corporativos de `sharepoint.com` (OneDrive empresarial). Outros enderecos sao recusados com mensagem de erro. O painel nao faz upload, nao copia arquivos e nao altera permissoes: configure o compartilhamento no OneDrive para as pessoas que precisam consultar os comprovantes. Todos os colaboradores com acesso a base veem os links, mas apenas quem tiver permissao no OneDrive consegue abrir os arquivos. Nao use links com acesso publico se o comprovante for restrito.
+
+Os vinculos e perfis sao salvos no modelo central existente, sem nova migracao SQL ou integracao com Microsoft Graph. Aguarde **sincronizado** antes de fechar a pagina.
+
 Ao criar uma licenca, selecione uma unidade cadastrada. Cidade e UF sao preenchidas automaticamente e devem ser alteradas no cadastro da unidade, nao individualmente na licenca. O botao **+ Nova licenca** de cada unidade ja seleciona esse cadastro. Excluir a ultima licenca nao exclui a unidade.
 
 Filtros por status/risco mostram apenas unidades com licencas correspondentes. Sem esses filtros, as unidades vazias continuam visiveis; podem ser buscadas por nome, cidade ou UF. O cadastro usa a mesma sincronizacao e protecao contra conflitos das licencas. **Restaurar dados** tambem restaura o catalogo padrao, removendo cadastros personalizados da base compartilhada apos confirmacao.

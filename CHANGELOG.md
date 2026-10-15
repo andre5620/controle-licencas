@@ -2,6 +2,14 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.8.0] - 2026-10-15
+
+### Perfil e comprovantes
+
+- Edição do perfil completo na visão por unidade, preservando campos adicionais e valores apagados.
+- Vínculos de arquivos e pastas do OneDrive independentes por unidade e por licença, com inclusão, edição e remoção.
+- Validação de links HTTPS da Microsoft e abertura sem alterar permissões ou enviar arquivos.
+
 ## [1.7.0] - 2026-10-15
 
 ### Cadastro de unidades

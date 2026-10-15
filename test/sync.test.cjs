@@ -64,6 +64,7 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
       elements.set(id, {
         value: '', textContent: '', hidden: false, disabled: false, style: {},
         listeners: {}, classList: {add(){}, remove(){}},
+        querySelectorAll: ()=>[],
         addEventListener(name, callback){ this.listeners[name] = callback; }
       });
     }
@@ -86,7 +87,7 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
       querySelectorAll: ()=>[], activeElement: null, hidden: false
     },
     localStorage: {getItem: key=>storage.get(key) ?? null, setItem: (key, value)=>storage.set(key, value)},
-    console: {error: (...args)=>errors.push(args)}, crypto: webcrypto,
+    console: {error: (...args)=>errors.push(args)}, crypto: webcrypto, URL,
     setTimeout: ()=>0, clearTimeout(){}, setInterval(){}, confirm: ()=>true
   });
   if(withCatalog) vm.runInContext(readFileSync(join(root, 'data', 'fluxo.js'), 'utf8'), context);
@@ -517,4 +518,106 @@ test('unidade sem licenca e recuperada em outra sessao pela base central', async
   await second.run('loadData()');
   assert.equal(second.run('MODEL.units[0].id'), 'INDEPENDENTE');
   assert.equal(second.run('DATA.length'), 0);
+});
+
+test('perfil completo e salvo, permite limpar campos e preserva dados extras e comprovantes', async ()=>{
+  const app = createApp({withCatalog: true});
+  await app.run('loadData()');
+  app.run(`const unit = MODEL.units.find(u=>u.nome === 'Fábrica');
+    unit.profile.extra = 'Preservar'; unit.evidenceLinks = [{name:'Arquivo',url:'https://1drv.ms/x/test'}];
+    openUnitEditor(unit.id);`);
+  assert.notEqual(app.element('up_cnpj').value, '');
+  app.element('up_razaoSocial').value = 'Empresa atualizada';
+  app.element('up_cnpj').value = '';
+  app.element('up_endereco').value = 'Novo endereco';
+  app.element('up_extintores').value = '12';
+  await app.element('unitForm').listeners.submit({preventDefault(){}});
+  app.run('MODEL = applyReferenceData(MODEL);');
+  assert.equal(app.run("MODEL.units.find(u=>u.nome === 'Fábrica').profile.razaoSocial"), 'Empresa atualizada');
+  assert.equal(app.run("MODEL.units.find(u=>u.nome === 'Fábrica').profile.cnpj"), '');
+  assert.equal(app.run("MODEL.units.find(u=>u.nome === 'Fábrica').profile.extintores"), '12');
+  assert.equal(app.run("MODEL.units.find(u=>u.nome === 'Fábrica').profile.extra"), 'Preservar');
+  assert.equal(app.run("MODEL.units.find(u=>u.nome === 'Fábrica').evidenceLinks.length"), 1);
+});
+
+test('perfil editado atualiza dados nas licencas sem perder atividades', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL = modelFromLegacyData([window.DEFAULT_DATA[0]]);
+    DATA = flattenModel(MODEL); DATA[0].activities = [{name:'Etapa'}];
+    openUnitEditor(MODEL.units[0].id);`);
+  app.element('up_razaoSocial').value = 'Empresa';
+  app.element('up_cnpj').value = 'Novo CNPJ';
+  await app.element('unitForm').listeners.submit({preventDefault(){}});
+  assert.equal(app.run('MODEL.processes[0].cnpj'), 'Novo CNPJ');
+  assert.equal(app.run('DATA[0].perfilUnidade.razaoSocial'), 'Empresa');
+  assert.equal(app.run('MODEL.processes[0].activities[0].name'), 'Etapa');
+});
+
+test('somente links HTTPS validos do OneDrive e SharePoint sao aceitos', ()=>{
+  const app = createApp();
+  for(const url of ['https://1drv.ms/f/test','https://onedrive.live.com/?id=123',
+    'https://empresa-my.sharepoint.com/:f:/g/personal/test']){
+    assert.equal(app.run(`oneDriveUrl(${JSON.stringify(url)})`), url);
+  }
+  for(const url of ['javascript:alert(1)','http://1drv.ms/test','https://1drv.ms.evil.invalid/test',
+    'https://evilsharepoint.com/test','https://example.com','https://user:pass@1drv.ms/test',
+    'https://1drv.ms:8080/test','not a url']){
+    assert.throws(()=>app.run(`oneDriveUrl(${JSON.stringify(url)})`));
+  }
+});
+
+test('vinculos de unidade e licenca podem ser criados e editados separadamente e persistem', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL = modelFromLegacyData([window.DEFAULT_DATA[0]]);
+    DATA = flattenModel(MODEL); openEvidenceEditor('unit', MODEL.units[0].id);`);
+  const submit = ()=>app.element('evidenceForm').listeners.submit({preventDefault(){}});
+  app.element('evidenceName').value = 'Pasta da unidade';
+  app.element('evidenceUrl').value = 'https://1drv.ms/f/unit';
+  await submit();
+  assert.equal(app.run('MODEL.units[0].evidenceLinks[0].name'), 'Pasta da unidade');
+  app.run("openEvidenceEditor('license', DATA[0].id);");
+  app.element('evidenceName').value = 'Licenca PDF';
+  app.element('evidenceUrl').value = 'https://empresa.sharepoint.com/licenca.pdf';
+  await submit();
+  assert.equal(app.run('MODEL.processes[0].evidenceLinks[0].name'), 'Licenca PDF');
+  app.run("openEvidenceEditor('license', DATA[0].id, 0);");
+  app.element('evidenceName').value = 'PDF atualizado';
+  await submit();
+  assert.equal(app.run('MODEL.processes[0].evidenceLinks.length'), 1);
+  assert.equal(app.run('MODEL.processes[0].evidenceLinks[0].name'), 'PDF atualizado');
+  assert.equal(app.run('MODEL.units[0].evidenceLinks[0].name'), 'Pasta da unidade');
+});
+
+test('vinculos invalidos ou duplicados nao sao salvos e exibem erro', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-1',nome:'Teste',cidade:'Cidade',uf:'SP'});
+    openEvidenceEditor('unit','U-1');`);
+  const submit = ()=>app.element('evidenceForm').listeners.submit({preventDefault(){}});
+  app.element('evidenceName').value = 'Arquivo';
+  app.element('evidenceUrl').value = 'https://example.com/file';
+  await submit();
+  assert.match(app.element('evidenceError').textContent, /HTTPS do OneDrive/);
+  assert.equal(app.run('MODEL.units[0].evidenceLinks'), undefined);
+  app.element('evidenceUrl').value = 'https://1drv.ms/f/test';
+  await submit();
+  app.run("openEvidenceEditor('unit','U-1');");
+  app.element('evidenceName').value = 'Duplicado';
+  app.element('evidenceUrl').value = 'https://1drv.ms/f/test';
+  await submit();
+  assert.match(app.element('evidenceError').textContent, /já está vinculado/);
+  assert.equal(app.run('MODEL.units[0].evidenceLinks.length'), 1);
+});
+
+test('renderizacao de comprovantes escapa conteudo e nao torna URL insegura clicavel', ()=>{
+  const app = createApp();
+  const markup = app.run(`renderEvidence('unit',{id:'U-1',evidenceLinks:[
+    {name:'<script>alert(1)</script>',url:'javascript:alert(1)'},
+    {name:'Arquivo',url:'https://1drv.ms/f/test'}]})`);
+  assert.doesNotMatch(markup, /href="javascript:|<script>/);
+  assert.match(markup, /link inválido/);
+  assert.match(markup, /rel="noopener noreferrer"/);
+  assert.match(markup, /&lt;script&gt;/);
 });

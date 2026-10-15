@@ -24,6 +24,8 @@ button{font-family:var(--font);cursor:pointer;}
 .btn:hover{border-color:var(--ink-soft);}
 .btn:disabled{opacity:.5;cursor:not-allowed;}
 .unit-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;}
+.evidence-section{margin:16px 0;border-top:1px solid var(--line);padding-top:8px;}
+.evidence-list{padding-left:20px;overflow-wrap:anywhere;}
 .btn-primary{background:var(--ink);color:#fff;border-color:var(--ink);}
 .btn-primary:hover{background:#000;}
 .btn-accent{background:var(--teal);border-color:var(--teal);color:#fff;}

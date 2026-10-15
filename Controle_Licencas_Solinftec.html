@@ -112,10 +112,28 @@
         <div class="field"><label for="un_cidade">Cidade</label><input id="un_cidade" required></div>
         <div class="field"><label for="un_uf">UF</label><select id="un_uf" required></select></div>
       </div>
+      <div class="section-label">Perfil da unidade</div>
+      <div class="field-grid" id="unitProfileFields"></div>
       <p id="unitError" class="auth-error" role="alert" hidden></p>
       <div class="modal-actions">
         <button class="btn" type="button" onclick="closeModal('overlayUnit')">Cancelar</button>
         <button class="btn btn-primary" type="submit">Salvar unidade</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="overlay" id="overlayEvidence">
+  <div class="modal">
+    <h3 id="evidenceTitle">Comprovante do OneDrive</h3>
+    <p>Vincule um arquivo ou pasta existente. O acesso depende das permissões do OneDrive.</p>
+    <form id="evidenceForm">
+      <div class="field"><label for="evidenceName">Nome do comprovante</label><input id="evidenceName" required></div>
+      <div class="field"><label for="evidenceUrl">Link do OneDrive</label><input id="evidenceUrl" type="url" required placeholder="https://..."></div>
+      <p id="evidenceError" class="auth-error" role="alert" hidden></p>
+      <div class="modal-actions">
+        <button class="btn" type="button" onclick="closeModal('overlayEvidence')">Cancelar</button>
+        <button class="btn btn-primary" type="submit">Salvar vínculo</button>
       </div>
     </form>
   </div>
