@@ -24,6 +24,14 @@ button{font-family:var(--font);cursor:pointer;}
 .btn:hover{border-color:var(--ink-soft);}
 .btn:disabled{opacity:.5;cursor:not-allowed;}
 .unit-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;}
+.unit-actions a.btn{text-decoration:none;display:inline-block;}
+.unit-detail-header{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin:24px 0;padding-bottom:20px;}
+.unit-detail-header h1{margin:4px 0;font-size:30px;}
+.unit-detail-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
+.unit-detail-section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin:20px 0;min-width:0;overflow-x:auto;}
+.unit-detail-section h2{font-size:20px;margin:0 0 16px;}
+.unit-detail-section li{margin:8px 0;}
+#dashboardFilters[hidden],#kpiRow[hidden]{display:none;}
 .evidence-section{margin:16px 0;border-top:1px solid var(--line);padding-top:8px;}
 .evidence-list{padding-left:20px;overflow-wrap:anywhere;}
 .btn-primary{background:var(--ink);color:#fff;border-color:var(--ink);}

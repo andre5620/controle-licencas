@@ -3,7 +3,7 @@ const DEFAULT_MODEL = window.DEFAULT_MODEL || null;
 const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const PROFILE_FIELDS = [
   ['Razão social', 'razaoSocial'], ['CNPJ', 'cnpj'], ['Endereço', 'endereco'],
   ['Atividade ambiental', 'atividadeAmbiental'], ['Atividades conduzidas', 'atividadesConduzidas'],
@@ -443,6 +443,12 @@ function render(){
   const root = document.getElementById('licList');
   const unitPanel = document.getElementById('unitPanel');
   const gantt = document.getElementById('ganttView');
+  const unitId = activePanel === 'unit' ? currentUnitId() : null;
+  const unitDetail = Boolean(unitId);
+  document.getElementById('dashboardFilters').hidden = unitDetail;
+  document.getElementById('kpiRow').hidden = unitDetail;
+  if(activePanel !== 'license' || activeView !== 'list') root.innerHTML = '';
+  if(activePanel !== 'unit') unitPanel.innerHTML = '';
   root.hidden = activePanel !== 'license' || activeView !== 'list';
   unitPanel.hidden = activePanel !== 'unit';
   gantt.hidden = activePanel !== 'license' || activeView !== 'gantt';
@@ -451,7 +457,8 @@ function render(){
   document.getElementById('btnListView').classList.toggle('active', activeView === 'list');
   document.getElementById('btnGanttView').classList.toggle('active', activeView === 'gantt');
   if(activePanel === 'unit'){
-    renderUnitPanel(list);
+    if(unitId) renderUnitDetail(unitId);
+    else renderUnitPanel(list);
     return;
   }
   if(activeView === 'gantt'){
@@ -463,6 +470,70 @@ function render(){
     return;
   }
   root.innerHTML = list.map(lic=>renderCard(lic)).join('');
+  attachCardEvents();
+  attachEvidenceEvents(root);
+}
+
+function currentUnitId(){
+  return new URLSearchParams((window.location.hash || '').slice(1)).get('unit');
+}
+
+function navigatePanel(hash){
+  window.location.hash = hash;
+  applyPanelRoute();
+}
+
+function applyPanelRoute(){
+  activePanel = window.location.hash === '#licenses' ? 'license' : 'unit';
+  if(appReady) render();
+}
+
+window.addEventListener('hashchange', applyPanelRoute);
+
+function renderUnitDetail(id){
+  const root = document.getElementById('unitPanel');
+  const unit = MODEL.units.find(item=>item.id === id);
+  const back = '<button class="btn" data-back-units>← Voltar às unidades</button>';
+  if(!unit){
+    root.innerHTML = `${back}<p class="empty" role="status">Unidade não encontrada nesta organização.</p>`;
+    attachUnitPanelEvents();
+    return;
+  }
+  const licenses = DATA.filter(lic=>lic.unidadeId === id);
+  const pending = licenses.filter(lic=>['Pendente','Condicionada'].includes(lic.status)).length;
+  const expired = licenses.filter(lic=>lic.vencimento && daysUntil(lic.vencimento) < 0).length;
+  const due = licenses.filter(lic=>lic.vencimento && daysUntil(lic.vencimento) >= 0 && daysUntil(lic.vencimento) <= 120).length;
+  root.innerHTML = `<article class="unit-detail">
+    ${back}
+    <header class="unit-detail-header"><div><div class="unit-panel-kicker">Unidade</div>
+      <h1 tabindex="-1" id="unitDetailTitle">${esc(unit.nome || unit.codigo)}</h1>
+      <p>${esc(unit.cidade)} / ${esc(unit.uf)}</p></div>
+      <div class="unit-actions"><button class="btn" data-edit-unit="${esc(unit.id)}">Editar unidade</button>
+        <button class="btn btn-primary" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
+    </header>
+    <div class="unit-detail-summary">
+      <div class="kpi"><div class="num">${licenses.length}</div><div class="lbl">Licenças</div></div>
+      <div class="kpi"><div class="num">${pending}</div><div class="lbl">Pendentes / condicionadas</div></div>
+      <div class="kpi"><div class="num">${expired}</div><div class="lbl">Vencidas</div></div>
+      <div class="kpi"><div class="num">${due}</div><div class="lbl">Vencem em até 120 dias</div></div>
+    </div>
+    <section class="unit-detail-section" aria-label="Perfil da unidade">
+      ${renderUnitProfile({perfilUnidade: unit.profile || {}}) || '<h2>Perfil da unidade</h2><p>Perfil ainda não preenchido. Use Editar unidade.</p>'}
+    </section>
+    <section class="unit-detail-section">${renderEvidence('unit', unit)}</section>
+    <section class="unit-detail-section"><h2>Obrigações ambientais</h2>
+      ${(unit.environmentalLicenses || []).map(item=>`<div class="notes-box"><strong>${esc(item.tipo)}</strong>
+        <p>${esc(item.orgao)} · ${esc(item.numero || 'Sem número')}</p>
+        <p>${esc(item.motivacao || '')}</p><p>${esc(item.risco || '')}</p></div>`).join('') || '<p>Nenhuma obrigação cadastrada.</p>'}
+    </section>
+    <section class="unit-detail-section"><h2>Fluxo padrão</h2>
+      ${(unit.standardFlow || []).length ? `<ol>${unit.standardFlow.map(step=>`<li>${esc(step.nome)}</li>`).join('')}</ol>` : '<p>Nenhuma etapa padrão cadastrada.</p>'}
+    </section>
+    <section class="unit-detail-section"><h2>Licenças da unidade</h2>
+      ${licenses.map(lic=>renderCard(lic)).join('') || '<p>Nenhuma licença cadastrada. Use + Nova licença para adicionar a primeira.</p>'}
+    </section>
+  </article>`;
+  attachUnitPanelEvents();
   attachCardEvents();
   attachEvidenceEvents(root);
 }
@@ -493,13 +564,9 @@ function renderUnitPanel(list){
     return `<article class="unit-panel">
       <div class="unit-panel-head"><div><div class="unit-panel-kicker">Unidade</div><h2>${esc(name)}</h2><p>${esc(sample.cidade || '')}${sample.uf ? `/${esc(sample.uf)}` : ''}</p></div><button class="btn btn-ghost" data-edit-unit="${esc(unit.id)}">Editar unidade</button></div>
       <div class="unit-summary"><span><strong>${licenses.length}</strong> processos</span><span><strong>${unit.environmentalLicenses?.length || 0}</strong> obrigações</span><span><strong>${done}/${activityTotal}</strong> etapas concluídas</span></div>
-      <div class="unit-actions"><button class="btn" data-open-unit="${esc(name)}">Ver licenças</button><button class="btn" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
+      <div class="unit-actions"><a class="btn" href="#unit=${encodeURIComponent(unit.id)}">Abrir unidade</a><button class="btn" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
       <div class="unit-profile-strip"><span><b>Razão social</b>${esc(profile.razaoSocial || sample.razaoSocial || 'Não informado')}</span><span><b>Atividade</b>${esc(profile.atividadesConduzidas || 'Não informado')}</span><span><b>Área</b>${esc(profile.area || 'Não informado')}</span></div>
-      <details class="standard-flow"><summary>Perfil completo da unidade</summary>
-        ${renderUnitProfile({perfilUnidade: profile})}
-      </details>
-      ${renderEvidence('unit', unit)}
-      <div class="unit-processes"><div class="section-label">Processos da unidade</div>${licenses.map(lic=>`<button class="unit-process" data-open-license="${esc(lic.id)}"><span><strong>${esc(lic.tipoLicenca || lic.categoria || 'Processo')}</strong><small>${esc(lic.id)} · ${esc(lic.status || 'Sem status')}</small></span><span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status || '—')}</span></button>`).join('') || '<p>Nenhuma licença cadastrada.</p>'}</div>
+      ${!licenses.length ? '<p>Nenhuma licença cadastrada.</p>' : ''}
     </article>`;
   }).join('')}</div>`;
   attachUnitPanelEvents();
@@ -507,24 +574,12 @@ function renderUnitPanel(list){
 }
 
 function attachUnitPanelEvents(){
+  document.querySelectorAll('[data-back-units]').forEach(button=>button.addEventListener('click', ()=>navigatePanel('#units')));
   document.querySelectorAll('[data-edit-unit]').forEach(button=>button.addEventListener('click', ()=>{
     openUnitEditor(button.dataset.editUnit);
   }));
   document.querySelectorAll('[data-new-unit-license]').forEach(button=>button.addEventListener('click', ()=>{
     openNewLicense(button.dataset.newUnitLicense);
-  }));
-  document.querySelectorAll('[data-open-unit]').forEach(button=>button.addEventListener('click', ()=>{
-    document.getElementById('fUnidade').value = button.dataset.openUnit;
-    activePanel = 'license';
-    activeView = 'list';
-    render();
-  }));
-  document.querySelectorAll('[data-open-license]').forEach(button=>button.addEventListener('click', ()=>{
-    document.getElementById('fUnidade').value = DATA.find(lic=>lic.id === button.dataset.openLicense)?.unidade || '';
-    expandedIds.add(button.dataset.openLicense);
-    activePanel = 'license';
-    activeView = 'list';
-    render();
   }));
 }
 
@@ -849,8 +904,8 @@ document.getElementById('fUnidade').addEventListener('change', render);
 document.getElementById('fStatus').addEventListener('change', render);
 document.getElementById('fRisco').addEventListener('change', render);
 document.getElementById('fBusca').addEventListener('input', render);
-document.getElementById('btnLicensePanel').addEventListener('click', ()=>{ activePanel='license'; render(); });
-document.getElementById('btnUnitPanel').addEventListener('click', ()=>{ activePanel='unit'; render(); });
+document.getElementById('btnLicensePanel').addEventListener('click', ()=>navigatePanel('#licenses'));
+document.getElementById('btnUnitPanel').addEventListener('click', ()=>navigatePanel('#units'));
 document.getElementById('btnListView').addEventListener('click', ()=>{ activeView='list'; render(); });
 document.getElementById('btnGanttView').addEventListener('click', ()=>{ activeView='gantt'; render(); });
 document.getElementById('btnClearFilters').addEventListener('click', ()=>{
@@ -969,9 +1024,8 @@ document.getElementById('unitForm').addEventListener('submit', async event=>{
     MODEL.units.push(unit);
   }
   const saving = saveData();
-  activePanel = 'unit';
   closeModal('overlayUnit');
-  render();
+  navigatePanel(`#unit=${encodeURIComponent(unit.id)}`);
   showToast(await saving ? 'Unidade salva' : 'Unidade salva localmente; sincronização pendente');
 });
 
@@ -1060,6 +1114,7 @@ async function startAuthenticatedApp(session){
   setAuthenticatedUser(session);
   authenticatedUserId = session.user.id;
   await loadData();
+  applyPanelRoute();
   render();
   setAppReady(true);
   closeModal('overlayAuth');
@@ -1254,6 +1309,7 @@ setInterval(refreshWhenIdle, 15000);
   }
   try{
     await loadData();
+    applyPanelRoute();
     render();
     setAppReady(true);
   }catch(error){

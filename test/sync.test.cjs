@@ -79,7 +79,7 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
       save: async (_model, revision)=>revision + 1,
       ...service
     },
-    addEventListener(){}, location: {reload(){}}
+    addEventListener(){}, location: {hash: '', reload(){}}
   };
   const context = vm.createContext({
     window, document: {
@@ -87,7 +87,7 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
       querySelectorAll: ()=>[], activeElement: null, hidden: false
     },
     localStorage: {getItem: key=>storage.get(key) ?? null, setItem: (key, value)=>storage.set(key, value)},
-    console: {error: (...args)=>errors.push(args)}, crypto: webcrypto, URL,
+    console: {error: (...args)=>errors.push(args)}, crypto: webcrypto, URL, URLSearchParams,
     setTimeout: ()=>0, clearTimeout(){}, setInterval(){}, confirm: ()=>true
   });
   if(withCatalog) vm.runInContext(readFileSync(join(root, 'data', 'fluxo.js'), 'utf8'), context);
@@ -620,4 +620,54 @@ test('renderizacao de comprovantes escapa conteudo e nao torna URL insegura clic
   assert.match(markup, /link inválido/);
   assert.match(markup, /rel="noopener noreferrer"/);
   assert.match(markup, /&lt;script&gt;/);
+});
+
+test('pagina completa usa link com ID estavel e aceita caracteres especiais', ()=>{
+  const app = createApp();
+  app.run("window.location.hash = '#unit=' + encodeURIComponent('U-1 /?#');");
+  assert.equal(app.run('currentUnitId()'), 'U-1 /?#');
+  app.run("navigatePanel('#licenses');");
+  assert.equal(app.run('activePanel'), 'license');
+  assert.equal(app.run('currentUnitId()'), null);
+  app.run("navigatePanel('#units');");
+  assert.equal(app.run('activePanel'), 'unit');
+});
+
+test('pagina da unidade mostra todos os dados e licencas independente dos filtros da lista', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL = modelFromLegacyData([window.DEFAULT_DATA[0]]);
+    DATA = flattenModel(MODEL);
+    MODEL.units[0].profile = {cnpj:'CNPJ completo',extintores:'12'};
+    MODEL.units[0].evidenceLinks = [{name:'Pasta unidade',url:'https://1drv.ms/f/unit'}];
+    MODEL.units[0].environmentalLicenses = [{tipo:'Obrigacao',numero:'123'}];
+    MODEL.units[0].standardFlow = [{nome:'Etapa padrao'}];`);
+  app.element('fBusca').value = 'Sem resultado';
+  app.run('renderUnitDetail(MODEL.units[0].id);');
+  const html = app.element('unitPanel').innerHTML;
+  for(const value of ['CNPJ completo','Pasta unidade','Obrigacao','Etapa padrao','L-1','Voltar às unidades']){
+    assert.ok(html.includes(value), value);
+  }
+});
+
+test('unidade sem processos tem pagina completa e link inexistente mostra erro sem outra base', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'VAZIA',nome:'Unidade vazia',cidade:'Cidade',uf:'SP'});
+    renderUnitDetail('VAZIA');`);
+  assert.match(app.element('unitPanel').innerHTML, /adicionar a primeira/);
+  assert.match(app.element('unitPanel').innerHTML, /Editar unidade/);
+  app.run("renderUnitDetail('inexistente');");
+  assert.match(app.element('unitPanel').innerHTML, /Unidade não encontrada/);
+  assert.doesNotMatch(app.element('unitPanel').innerHTML, /Unidade vazia/);
+});
+
+test('cards sao resumos com links diretos sem carregar formularios e comprovantes', async ()=>{
+  const app = createApp({withCatalog:true});
+  await app.run('loadData()');
+  app.run('renderUnitPanel(DATA);');
+  const html = app.element('unitPanel').innerHTML;
+  assert.match(html, /href="#unit=/);
+  assert.match(html, /Abrir unidade/);
+  assert.doesNotMatch(html, /evidence-section|Perfil completo da unidade|class="lic-body"/);
 });

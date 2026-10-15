@@ -2,6 +2,15 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.9.0] - 2026-10-15
+
+### Páginas de unidades
+
+- Cards resumidos com acesso à página completa de cada unidade.
+- Links diretos por ID, preservados ao recarregar e navegar pelo histórico.
+- Perfil, indicadores, comprovantes, obrigações, fluxo padrão e edição de licenças na mesma página.
+- Filtros globais não limitam as informações da página completa.
+
 ## [1.8.0] - 2026-10-15
 
 ### Perfil e comprovantes

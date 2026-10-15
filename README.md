@@ -35,6 +35,12 @@ Use o seletor **Por licença** para acompanhar cada processo individualmente ou 
 
 O painel abre em **Por unidade**. O cadastro e independente das licencas: unidades sem processos tambem aparecem, com a opcao de criar a primeira licenca.
 
+Os cards exibem um resumo. Use **Abrir unidade** para acessar uma pagina completa com perfil, indicadores, comprovantes do OneDrive, obrigacoes ambientais, fluxo padrao e todas as licencas da unidade. Edicao de perfil, criacao de licenca e edicao de atividades continuam disponiveis nessa pagina.
+
+Cada unidade tem um link direto no formato `Controle_Licencas_Solinftec.html#unit=ID`. E possivel compartilhar esse endereco, recarregar a pagina e usar Voltar/Avancar do navegador sem perder a unidade selecionada. O acesso continua exigindo login e permissao na organizacao; um ID inexistente mostra uma mensagem, sem abrir outra unidade. **Voltar as unidades** retorna aos cards, preservando os filtros da lista.
+
+Na pagina completa, os filtros e indicadores globais ficam ocultos: os indicadores sao calculados somente para a unidade e suas licencas nao ficam limitadas pelos filtros da lista anterior. Os cards de licenca podem ser expandidos nessa mesma tela. Nao ha mudanca no armazenamento ou necessidade de migracao SQL.
+
 O catalogo inicial de `data/fluxo.js` contem oito unidades: Fabrica, NY Tower, Concordia e NetZero Farm (Aracatuba/SP), Balsas (Balsas/MA), LEM (Luis Eduardo Magalhaes/BA), Sinop (Sinop/MT) e Querencia (Querencia/MT). Os registros existentes sao preservados; unidades iniciais ausentes sao acrescentadas uma unica vez, e o catalogo e persistido junto ao modelo na proxima gravacao. Nao e necessaria nova migracao SQL.
 
 Use **+ Nova unidade** para cadastrar nome, cidade e UF e **Editar unidade** no card para corrigir esses campos. Nomes repetidos nao sao aceitos. As licencas vinculadas passam a exibir o novo nome/localidade sem perder o vinculo com o ID da unidade.
