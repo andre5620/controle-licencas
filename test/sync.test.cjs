@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {join} = require('node:path');
 const vm = require('node:vm');
+const {webcrypto} = require('node:crypto');
 
 const root = join(__dirname, '..');
 const serviceSource = readFileSync(join(root, 'js', 'data-service.js'), 'utf8');
@@ -55,7 +56,7 @@ function createService({state = {model: emptyModel(), revision: 2}, tables = {},
   return {service: window.LicenseDataService, state, calls};
 }
 
-function createApp({remote = true, service = {}, storage = new Map()} = {}){
+function createApp({remote = true, service = {}, storage = new Map(), withCatalog = false} = {}){
   const elements = new Map();
   const errors = [];
   const element = id=>{
@@ -85,9 +86,10 @@ function createApp({remote = true, service = {}, storage = new Map()} = {}){
       querySelectorAll: ()=>[], activeElement: null, hidden: false
     },
     localStorage: {getItem: key=>storage.get(key) ?? null, setItem: (key, value)=>storage.set(key, value)},
-    console: {error: (...args)=>errors.push(args)},
+    console: {error: (...args)=>errors.push(args)}, crypto: webcrypto,
     setTimeout: ()=>0, clearTimeout(){}, setInterval(){}, confirm: ()=>true
   });
+  if(withCatalog) vm.runInContext(readFileSync(join(root, 'data', 'fluxo.js'), 'utf8'), context);
   vm.runInContext(appSource, context);
   const run = code=>vm.runInContext(code, context);
   run("render = ()=>{}; authenticatedUserId = 'user-1';");
@@ -400,4 +402,119 @@ test('edicoes agrupadas concluem todas as promessas sem perder a ultima alteraca
   assert.equal(results[1], true);
   assert.equal(requests.length, 1);
   assert.equal(requests[0].model.processes[0].notes, 'Ultima');
+});
+
+test('a visao inicial e por unidade', ()=>{
+  assert.equal(createApp().run('activePanel'), 'unit');
+});
+
+test('catalogo inicial tem oito unidades e nao duplica ou recria nomes editados', ()=>{
+  const app = createApp({withCatalog: true});
+  app.run('MODEL = applyReferenceData({version:2,units:[],processTypes:[],processes:[]});');
+  assert.equal(app.run('MODEL.units.length'), 8);
+  assert.equal(app.run("MODEL.units.find(unit=>unit.nome === 'LEM').uf"), 'BA');
+  app.run("MODEL.units[0].nome = 'Fabrica renomeada'; MODEL = applyReferenceData(MODEL);");
+  assert.equal(app.run('MODEL.units.length'), 8);
+  assert.equal(app.run('MODEL.unitCatalogVersion'), 1);
+});
+
+test('salvar e excluir a ultima licenca nao remove a unidade cadastrada', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-EMPTY',nome:'Unidade vazia',cidade:'Cidade',uf:'SP'});
+    DATA = [];`);
+  await app.run('saveData()');
+  assert.equal(app.run('MODEL.units[0].id'), 'U-EMPTY');
+  app.run(`DATA = [{...window.DEFAULT_DATA[0],unidadeId:'U-EMPTY',unidade:'Unidade vazia'}];`);
+  await app.run('saveData()');
+  app.run('DATA = [];');
+  await app.run('saveData()');
+  assert.equal(app.run('MODEL.units.length'), 1);
+});
+
+test('cadastro valida campos, UF e nomes duplicados', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  const submit = ()=>app.element('unitForm').listeners.submit({preventDefault(){}});
+  app.element('un_nome').value = 'Nova';
+  app.element('un_cidade').value = 'Cidade';
+  app.element('un_uf').value = 'XX';
+  await submit();
+  assert.equal(app.run('MODEL.units.length'), 0);
+  assert.match(app.element('unitError').textContent, /UF válida/);
+  app.element('un_uf').value = 'SP';
+  await submit();
+  assert.equal(app.run('MODEL.units.length'), 1);
+  app.element('un_nome').value = 'nóva';
+  await submit();
+  assert.equal(app.run('MODEL.units.length'), 1);
+  assert.match(app.element('unitError').textContent, /Já existe/);
+});
+
+test('editar unidade atualiza todas as licencas vinculadas e preserva seu ID', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL = modelFromLegacyData([window.DEFAULT_DATA[0]]);
+    DATA = flattenModel(MODEL);
+    editingUnitId = MODEL.units[0].id;`);
+  const id = app.run('editingUnitId');
+  app.element('un_nome').value = 'Nome atualizado';
+  app.element('un_cidade').value = 'Nova cidade';
+  app.element('un_uf').value = 'MT';
+  await app.element('unitForm').listeners.submit({preventDefault(){}});
+  assert.equal(app.run('MODEL.units.length'), 1);
+  assert.equal(app.run('MODEL.units[0].id'), id);
+  assert.equal(app.run('MODEL.processes[0].cidade'), 'Nova cidade');
+  assert.equal(app.run('DATA[0].unidade'), 'Nome atualizado');
+  assert.equal(app.run('flattenModel(MODEL)[0].uf'), 'MT');
+});
+
+test('nova licenca exige unidade e usa cidade e UF oficiais mesmo se formulario for adulterado', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.element('nl_id').value = 'NOVA';
+  const save = ()=>app.element('btnSaveNewLic').listeners.click();
+  await save();
+  assert.equal(app.run('DATA.length'), 0);
+  assert.match(app.element('toast').textContent, /Selecione/);
+  app.run("MODEL.units.push({id:'U-1',nome:'Oficial',cidade:'Sinop',uf:'MT'});");
+  app.element('nl_unidade').value = 'U-1';
+  app.element('nl_unidade').listeners.change();
+  assert.equal(app.element('nl_cidade').value, 'Sinop');
+  assert.equal(app.element('nl_uf').value, 'MT');
+  app.element('nl_cidade').value = 'Errada';
+  await save();
+  assert.equal(app.run('MODEL.processes[0].unidadeId'), 'U-1');
+  assert.equal(app.run('MODEL.processes[0].cidade'), 'Sinop');
+  assert.equal(app.run('MODEL.units.length'), 1);
+});
+
+test('unidade sem licenca aparece no painel e na busca por cidade', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run("MODEL.units.push({id:'U-1',nome:'Sem licenca',cidade:'Sinop',uf:'MT'});");
+  app.element('fBusca').value = 'Sinop';
+  app.run('renderUnitPanel([]);');
+  assert.match(app.element('unitPanel').innerHTML, /Sem licenca/);
+  assert.match(app.element('unitPanel').innerHTML, /Nenhuma licença cadastrada/);
+  app.element('fStatus').value = 'Obtida';
+  app.run('renderUnitPanel([]);');
+  assert.doesNotMatch(app.element('unitPanel').innerHTML, /Sem licenca/);
+});
+
+test('unidade sem licenca e recuperada em outra sessao pela base central', async ()=>{
+  let stored = emptyModel();
+  let revision = 1;
+  const service = {
+    load: async ()=>({model: structuredClone(stored), revision, organizationId:'org-1'}),
+    save: async model=>{ stored = structuredClone(model); return ++revision; }
+  };
+  const first = createApp({service});
+  await first.run('loadData()');
+  first.run("MODEL.units.push({id:'INDEPENDENTE',nome:'Independente',cidade:'Cidade',uf:'SP'});");
+  await first.run('saveData()');
+  const second = createApp({service});
+  await second.run('loadData()');
+  assert.equal(second.run('MODEL.units[0].id'), 'INDEPENDENTE');
+  assert.equal(second.run('DATA.length'), 0);
 });

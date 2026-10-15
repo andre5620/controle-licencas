@@ -2,6 +2,15 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.7.0] - 2026-10-15
+
+### Cadastro de unidades
+
+- Visão por unidade como tela inicial, incluindo unidades sem licenças.
+- Catálogo inicial de oito unidades com cidade e UF; cadastro e edição compartilhados no painel.
+- Seleção de unidade na nova licença, com cidade e UF automáticas.
+- Preservação dos cadastros ao excluir licenças e atualização dos processos vinculados ao editar a unidade.
+
 ## [1.6.0] - 2026-10-15
 
 ### Base central de licenças

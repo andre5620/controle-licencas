@@ -31,6 +31,18 @@ Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e d
 
 Use o seletor **Por licença** para acompanhar cada processo individualmente ou **Por unidade** para consultar o perfil do local, suas obrigações e todos os processos relacionados.
 
+### Cadastro de unidades
+
+O painel abre em **Por unidade**. O cadastro e independente das licencas: unidades sem processos tambem aparecem, com a opcao de criar a primeira licenca.
+
+O catalogo inicial de `data/fluxo.js` contem oito unidades: Fabrica, NY Tower, Concordia e NetZero Farm (Aracatuba/SP), Balsas (Balsas/MA), LEM (Luis Eduardo Magalhaes/BA), Sinop (Sinop/MT) e Querencia (Querencia/MT). Os registros existentes sao preservados; unidades iniciais ausentes sao acrescentadas uma unica vez, e o catalogo e persistido junto ao modelo na proxima gravacao. Nao e necessaria nova migracao SQL.
+
+Use **+ Nova unidade** para cadastrar nome, cidade e UF e **Editar unidade** no card para corrigir esses campos. Nomes repetidos nao sao aceitos. As licencas vinculadas passam a exibir o novo nome/localidade sem perder o vinculo com o ID da unidade.
+
+Ao criar uma licenca, selecione uma unidade cadastrada. Cidade e UF sao preenchidas automaticamente e devem ser alteradas no cadastro da unidade, nao individualmente na licenca. O botao **+ Nova licenca** de cada unidade ja seleciona esse cadastro. Excluir a ultima licenca nao exclui a unidade.
+
+Filtros por status/risco mostram apenas unidades com licencas correspondentes. Sem esses filtros, as unidades vazias continuam visiveis; podem ser buscadas por nome, cidade ou UF. O cadastro usa a mesma sincronizacao e protecao contra conflitos das licencas. **Restaurar dados** tambem restaura o catalogo padrao, removendo cadastros personalizados da base compartilhada apos confirmacao.
+
 No modo central, o Supabase e a fonte oficial dos dados. **Sincronizado** significa que o servidor confirmou a gravacao. As outras maquinas consultam atualizacoes a cada 15 segundos (com a pagina visivel e sem um campo em edicao), ao voltar para a janela ou ao clicar em **Sincronizar**.
 
 Cada gravacao envia o modelo completo em uma unica transacao, com controle de versao. Se duas pessoas alterarem a mesma versao, a segunda gravacao sera recusada em vez de sobrescrever o trabalho da primeira. Nesse caso, exporte o relatorio para preservar suas alteracoes, clique em **Carregar servidor** e reaplique as alteracoes necessarias.

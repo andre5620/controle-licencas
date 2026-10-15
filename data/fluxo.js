@@ -1,5 +1,15 @@
 /* Padrões extraídos de Controle de etapas - Fluxo.xlsx. */
 window.SPREADSHEET_REFERENCE = {
+  unitCatalog: [
+    {nome: 'Fábrica', cidade: 'Araçatuba', uf: 'SP'},
+    {nome: 'NY Tower', cidade: 'Araçatuba', uf: 'SP'},
+    {nome: 'Concórdia', cidade: 'Araçatuba', uf: 'SP'},
+    {nome: 'NetZero Farm', cidade: 'Araçatuba', uf: 'SP'},
+    {nome: 'Balsas', cidade: 'Balsas', uf: 'MA'},
+    {nome: 'LEM', cidade: 'Luís Eduardo Magalhães', uf: 'BA'},
+    {nome: 'Sinop', cidade: 'Sinop', uf: 'MT'},
+    {nome: 'Querência', cidade: 'Querência', uf: 'MT'}
+  ],
   source: 'Controle de etapas - Fluxo.xlsx',
   flowTemplate: [
     'Estatuto Social Tecsoil (atualizado)',

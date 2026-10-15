@@ -17,7 +17,7 @@ window.SPREADSHEET_LICENSES = {
   'Querência': [
     {tema:'Licenciamento Ambiental', orgao:'SEMA MT', tipo:'Ofício de Declaração de Dispensa de Licenciamento Ambiental', numero:'06600/2024', motivacao:'Dispensada', risco:'N.A.'}
   ],
-  'Concordia': [
+  'Concórdia': [
     {tema:'Licenciamento Ambiental', orgao:'CETESB', tipo:'LPIO', numero:'93050676', motivacao:'Operação descontinuada e licença encerrada', risco:'N.A.'}
   ],
   'NY Tower': [

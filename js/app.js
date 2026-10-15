@@ -3,13 +3,13 @@ const DEFAULT_MODEL = window.DEFAULT_MODEL || null;
 const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const STORAGE_KEY = 'licencas-solinftec-v1';
 let MODEL = null;
 let DATA = [];
 let expandedIds = new Set();
 let activeView = 'list';
-let activePanel = 'license';
+let activePanel = 'unit';
 const remoteEnabled = Boolean(window.SUPABASE_CONFIG?.required || window.LicenseDataService?.enabled);
 let cacheKey = STORAGE_KEY;
 let authenticatedUserId = null;
@@ -90,7 +90,7 @@ function isStructuredModel(model){
 }
 
 function modelFromLegacyData(records){
-  const units = [];
+  const units = (MODEL?.units || []).map(unit=>({...unit}));
   const unitByKey = new Map();
   const processTypes = [];
   const typeByKey = new Map();
@@ -105,25 +105,27 @@ function modelFromLegacyData(records){
   const processes = records.map(record=>{
     const unitKey = `${record.unidade}|${record.cidade}|${record.uf}`;
     if(!unitByKey.has(unitKey)){
-      const previous = previousUnits.find(unit=>
-        `${unit.nome || unit.codigo}|${unit.cidade}|${unit.uf}` === unitKey);
+      const previous = previousUnits.find(unit=>unit.id === record.unidadeId)
+        || previousUnits.find(unit=>
+          `${unit.nome || unit.codigo}|${unit.cidade}|${unit.uf}` === unitKey);
       const unit = {
         ...previous,
         id: previous?.id || nextId('U', previousUnits, units),
-        codigo: record.unidade,
-        nome: record.unidade,
+        codigo: previous?.codigo || record.unidade,
+        nome: previous?.nome || record.unidade,
         razaoSocial: record.razaoSocial || '',
         cnpj: record.cnpj || '',
         endereco: record.endereco || '',
-        cidade: record.cidade || '',
-        uf: record.uf || '',
+        cidade: previous?.cidade || record.cidade || '',
+        uf: previous?.uf || record.uf || '',
         caracteristicasOperacionais: previous?.caracteristicasOperacionais || '',
         caracteristicasAmbientais: previous?.caracteristicasAmbientais || '',
         risco: record.risco || 'NA',
         status: previous?.status || 'Ativa',
         observacoes: previous?.observacoes || ''
       };
-      units.push(unit);
+      if(previous) units[units.findIndex(item=>item.id === previous.id)] = unit;
+      else units.push(unit);
       unitByKey.set(unitKey, unit);
     }
     const typeKey = `${record.categoria}|${record.tipoLicenca}|${record.orgaoEmissor}`;
@@ -156,6 +158,9 @@ function modelFromLegacyData(records){
     const type = typeByKey.get(typeKey);
     return {
       ...record,
+      unidade: unit.nome,
+      cidade: unit.cidade,
+      uf: unit.uf,
       unidadeId: unit.id,
       tipoProcessoId: type.id,
       etapas: (record.activities || []).map((activity, index)=>({
@@ -168,13 +173,24 @@ function modelFromLegacyData(records){
       }))
     };
   });
-  return applyReferenceData({version: 2, units, processTypes, processes});
+  return applyReferenceData({...MODEL, version: 2, units, processTypes, processes});
 }
 
 function applyReferenceData(model){
   const references = SPREADSHEET_REFERENCE?.unitProfiles || {};
   const flow = SPREADSHEET_REFERENCE?.flowTemplate || [];
   const normalizeKey = value=>String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if(!model.unitCatalogVersion){
+    model.units = model.units || [];
+    (SPREADSHEET_REFERENCE?.unitCatalog || []).forEach((seed, index)=>{
+      const existing = model.units.find(unit=>normalizeKey(unit.nome || unit.codigo) === normalizeKey(seed.nome));
+      if(existing) return;
+      let id = `UC-${index+1}`;
+      while(model.units.some(unit=>unit.id === id)) id += '-new';
+      model.units.push({id, codigo: seed.nome, ...seed, status: 'Ativa'});
+    });
+    model.unitCatalogVersion = 1;
+  }
   const referenceFor = unit=>{
     const direct = references[unit.nome] || references[unit.codigo];
     if(direct) return direct;
@@ -207,9 +223,9 @@ function flattenModel(model){
     const type = types.get(process.tipoProcessoId) || {};
     return {
       ...process,
-      unidade: process.unidade || unit.nome || unit.codigo || '',
-      cidade: process.cidade || unit.cidade || '',
-      uf: process.uf || unit.uf || '',
+      unidade: unit.nome || unit.codigo || process.unidade || '',
+      cidade: unit.cidade || process.cidade || '',
+      uf: unit.uf || process.uf || '',
       razaoSocial: process.razaoSocial || unit.razaoSocial || '',
       endereco: process.endereco || unit.endereco || '',
       cnpj: process.cnpj || unit.cnpj || '',
@@ -382,14 +398,14 @@ function renderKPIs(list){
    FILTERS
 --------------------------------------------------------------- */
 function populateFilterOptions(){
-  const unidades = [...new Set(DATA.map(l=>l.unidade).filter(Boolean))].sort();
+  const unidades = [...new Set((MODEL?.units || []).map(unit=>unit.nome || unit.codigo).filter(Boolean))].sort();
   const statuses = [...new Set(DATA.map(l=>l.status).filter(Boolean))].sort();
   const riscos = [...new Set(DATA.map(l=>l.risco).filter(Boolean))].sort();
   const fu = document.getElementById('fUnidade');
   const fs = document.getElementById('fStatus');
   const fr = document.getElementById('fRisco');
   const cur = {u:fu.value, s:fs.value, r:fr.value};
-  fu.innerHTML = '<option value="">Todas as unidades</option>' + unidades.map(u=>`<option>${u}</option>`).join('');
+  fu.innerHTML = '<option value="">Todas as unidades</option>' + unidades.map(u=>`<option>${esc(u)}</option>`).join('');
   fs.innerHTML = '<option value="">Todos os status</option>' + statuses.map(s=>`<option>${s}</option>`).join('');
   fr.innerHTML = '<option value="">Todos os riscos</option>' + riscos.map(r=>`<option>${r}</option>`).join('');
   fu.value = cur.u; fs.value = cur.s; fr.value = cur.r;
@@ -446,31 +462,45 @@ function render(){
 
 function renderUnitPanel(list){
   const root = document.getElementById('unitPanel');
-  const grouped = new Map();
-  list.forEach(lic=>{
-    if(!grouped.has(lic.unidade)) grouped.set(lic.unidade, []);
-    grouped.get(lic.unidade).push(lic);
+  const selected = document.getElementById('fUnidade').value;
+  const query = document.getElementById('fBusca').value.trim().toLowerCase();
+  const licenseFilter = document.getElementById('fStatus').value || document.getElementById('fRisco').value;
+  const entries = (MODEL?.units || []).map(unit=>({
+    unit, licenses: list.filter(lic=>lic.unidadeId === unit.id)
+  })).filter(({unit, licenses})=>{
+    if(selected && (unit.nome || unit.codigo) !== selected) return false;
+    if(licenses.length) return true;
+    if(licenseFilter || DATA.some(lic=>lic.unidadeId === unit.id)) return false;
+    return !query || `${unit.nome} ${unit.cidade} ${unit.uf}`.toLowerCase().includes(query);
   });
-  if(!grouped.size){
+  if(!entries.length){
     root.innerHTML = '<div class="empty">Nenhuma unidade encontrada com os filtros atuais.</div>';
     return;
   }
-  root.innerHTML = `<div class="unit-panel-grid">${[...grouped.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([name, licenses])=>{
-    const sample = licenses[0];
-    const profile = sample.perfilUnidade || {};
+  root.innerHTML = `<div class="unit-panel-grid">${entries.sort((a,b)=>a.unit.nome.localeCompare(b.unit.nome)).map(({unit, licenses})=>{
+    const name = unit.nome || unit.codigo;
+    const sample = unit;
+    const profile = unit.profile || {};
     const done = licenses.reduce((sum, lic)=>sum+(lic.activities||[]).filter(a=>a.status==='Done').length,0);
     const activityTotal = licenses.reduce((sum, lic)=>sum+(lic.activities||[]).length,0);
     return `<article class="unit-panel">
-      <div class="unit-panel-head"><div><div class="unit-panel-kicker">Unidade</div><h2>${esc(name)}</h2><p>${esc(sample.cidade || '')}${sample.uf ? `/${esc(sample.uf)}` : ''}</p></div><button class="btn btn-ghost" data-open-unit="${esc(name)}">Ver licenças</button></div>
-      <div class="unit-summary"><span><strong>${licenses.length}</strong> processos</span><span><strong>${sample.licencasUnidade?.length || 0}</strong> obrigações</span><span><strong>${done}/${activityTotal}</strong> etapas concluídas</span></div>
+      <div class="unit-panel-head"><div><div class="unit-panel-kicker">Unidade</div><h2>${esc(name)}</h2><p>${esc(sample.cidade || '')}${sample.uf ? `/${esc(sample.uf)}` : ''}</p></div><button class="btn btn-ghost" data-edit-unit="${esc(unit.id)}">Editar unidade</button></div>
+      <div class="unit-summary"><span><strong>${licenses.length}</strong> processos</span><span><strong>${unit.environmentalLicenses?.length || 0}</strong> obrigações</span><span><strong>${done}/${activityTotal}</strong> etapas concluídas</span></div>
+      <div class="unit-actions"><button class="btn" data-open-unit="${esc(name)}">Ver licenças</button><button class="btn" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
       <div class="unit-profile-strip"><span><b>Razão social</b>${esc(profile.razaoSocial || sample.razaoSocial || 'Não informado')}</span><span><b>Atividade</b>${esc(profile.atividadesConduzidas || 'Não informado')}</span><span><b>Área</b>${esc(profile.area || 'Não informado')}</span></div>
-      <div class="unit-processes"><div class="section-label">Processos da unidade</div>${licenses.map(lic=>`<button class="unit-process" data-open-license="${esc(lic.id)}"><span><strong>${esc(lic.tipoLicenca || lic.categoria || 'Processo')}</strong><small>${esc(lic.id)} · ${esc(lic.status || 'Sem status')}</small></span><span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status || '—')}</span></button>`).join('')}</div>
+      <div class="unit-processes"><div class="section-label">Processos da unidade</div>${licenses.map(lic=>`<button class="unit-process" data-open-license="${esc(lic.id)}"><span><strong>${esc(lic.tipoLicenca || lic.categoria || 'Processo')}</strong><small>${esc(lic.id)} · ${esc(lic.status || 'Sem status')}</small></span><span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status || '—')}</span></button>`).join('') || '<p>Nenhuma licença cadastrada.</p>'}</div>
     </article>`;
   }).join('')}</div>`;
   attachUnitPanelEvents();
 }
 
 function attachUnitPanelEvents(){
+  document.querySelectorAll('[data-edit-unit]').forEach(button=>button.addEventListener('click', ()=>{
+    openUnitEditor(button.dataset.editUnit);
+  }));
+  document.querySelectorAll('[data-new-unit-license]').forEach(button=>button.addEventListener('click', ()=>{
+    openNewLicense(button.dataset.newUnitLicense);
+  }));
   document.querySelectorAll('[data-open-unit]').forEach(button=>button.addEventListener('click', ()=>{
     document.getElementById('fUnidade').value = button.dataset.openUnit;
     activePanel = 'license';
@@ -478,6 +508,7 @@ function attachUnitPanelEvents(){
     render();
   }));
   document.querySelectorAll('[data-open-license]').forEach(button=>button.addEventListener('click', ()=>{
+    document.getElementById('fUnidade').value = DATA.find(lic=>lic.id === button.dataset.openLicense)?.unidade || '';
     expandedIds.add(button.dataset.openLicense);
     activePanel = 'license';
     activeView = 'list';
@@ -561,7 +592,7 @@ function renderCard(lic){
 
 function renderFields(lic){
   const f = (label,key,type='text')=>`
-    <div class="field"><label>${label}</label><input type="${type}" data-lic="${esc(lic.id)}" data-field="${key}" value="${esc(lic[key]||'')}"></div>`;
+    <div class="field"><label>${label}</label><input type="${type}" data-lic="${esc(lic.id)}" data-field="${key}" value="${esc(lic[key]||'')}" ${['unidade','cidade','uf'].includes(key) ? 'readonly title="Altere pelo cadastro da unidade"' : ''}></div>`;
   const sel = (label,key,options)=>`
     <div class="field"><label>${label}</label>
     <select data-lic="${esc(lic.id)}" data-field="${key}">
@@ -725,8 +756,8 @@ document.getElementById('btnClearFilters').addEventListener('click', ()=>{
 
 document.getElementById('btnReset').addEventListener('click', async ()=>{
   if(!confirm(remoteEnabled
-    ? 'Restaurar os dados originais para TODOS os colaboradores? As alterações da base central serão substituídas.'
-    : 'Restaurar os dados originais da planilha? Todas as edições feitas neste navegador serão perdidas.')) return;
+    ? 'Restaurar licenças e unidades originais para TODOS os colaboradores? As alterações da base central e unidades personalizadas serão substituídas.'
+    : 'Restaurar licenças e unidades originais da planilha? Todas as edições e unidades personalizadas deste navegador serão perdidas.')) return;
   DATA = JSON.parse(JSON.stringify(DEFAULT_DATA));
   MODEL = null;
   const saved = await saveData();
@@ -764,16 +795,95 @@ document.getElementById('btnImportLocal').addEventListener('click', async ()=>{
   }
 });
 
-document.getElementById('btnNewLic').addEventListener('click', ()=>openModal('overlayNewLic'));
+const BRAZIL_UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+let editingUnitId = null;
+
+function openUnitEditor(id = null){
+  editingUnitId = id;
+  const unit = MODEL.units.find(item=>item.id === id);
+  document.getElementById('unitEditorTitle').textContent = unit ? 'Editar unidade' : 'Nova unidade';
+  document.getElementById('un_nome').value = unit?.nome || '';
+  document.getElementById('un_cidade').value = unit?.cidade || '';
+  document.getElementById('un_uf').innerHTML = '<option value="">Selecione</option>'
+    + BRAZIL_UFS.map(uf=>`<option>${uf}</option>`).join('');
+  document.getElementById('un_uf').value = unit?.uf || '';
+  document.getElementById('unitError').hidden = true;
+  openModal('overlayUnit');
+}
+
+document.getElementById('btnNewUnit').addEventListener('click', ()=>openUnitEditor());
+document.getElementById('unitForm').addEventListener('submit', async event=>{
+  event.preventDefault();
+  const nome = document.getElementById('un_nome').value.trim();
+  const cidade = document.getElementById('un_cidade').value.trim();
+  const uf = document.getElementById('un_uf').value;
+  const error = document.getElementById('unitError');
+  const key = value=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
+  const fail = message=>{ error.textContent = message; error.hidden = false; };
+  if(!nome || !cidade || !BRAZIL_UFS.includes(uf)){
+    fail('Informe o nome, a cidade e uma UF válida.');
+    return;
+  }
+  if(MODEL.units.some(unit=>unit.id !== editingUnitId && key(unit.nome || unit.codigo) === key(nome))){
+    fail('Já existe uma unidade com esse nome.');
+    return;
+  }
+  let unit = MODEL.units.find(item=>item.id === editingUnitId);
+  if(editingUnitId && !unit){
+    fail('A unidade não está mais disponível. Feche esta janela e carregue o servidor.');
+    return;
+  }
+  if(unit){
+    const oldName = unit.nome;
+    Object.assign(unit, {nome, codigo: nome, cidade, uf});
+    DATA.forEach(lic=>{
+      if(lic.unidadeId === unit.id) Object.assign(lic, {unidade: nome, cidade, uf});
+    });
+    if(document.getElementById('fUnidade').value === oldName){
+      document.getElementById('fUnidade').value = '';
+    }
+  }else{
+    unit = {id: `U-${crypto.randomUUID()}`, nome, codigo: nome, cidade, uf, status: 'Ativa'};
+    MODEL.units.push(unit);
+  }
+  const saving = saveData();
+  activePanel = 'unit';
+  closeModal('overlayUnit');
+  render();
+  showToast(await saving ? 'Unidade salva' : 'Unidade salva localmente; sincronização pendente');
+});
+
+function fillNewLicenseUnit(){
+  const unit = MODEL.units.find(item=>item.id === document.getElementById('nl_unidade').value);
+  document.getElementById('nl_cidade').value = unit?.cidade || '';
+  document.getElementById('nl_uf').value = unit?.uf || '';
+  document.getElementById('nl_razao').value = unit?.razaoSocial || unit?.profile?.razaoSocial || '';
+}
+
+function openNewLicense(unitId = ''){
+  const select = document.getElementById('nl_unidade');
+  select.innerHTML = '<option value="">Selecione uma unidade</option>' + [...MODEL.units]
+    .sort((a,b)=>a.nome.localeCompare(b.nome))
+    .map(unit=>`<option value="${esc(unit.id)}">${esc(unit.nome)} — ${esc(unit.cidade)}/${esc(unit.uf)}</option>`).join('');
+  select.value = unitId;
+  fillNewLicenseUnit();
+  openModal('overlayNewLic');
+}
+
+document.getElementById('nl_unidade').addEventListener('change', fillNewLicenseUnit);
+document.getElementById('btnNewLic').addEventListener('click', ()=>openNewLicense());
 document.getElementById('btnSaveNewLic').addEventListener('click', async ()=>{
   const id = document.getElementById('nl_id').value.trim();
   if(!id){ showToast('Informe um ID para a licença'); return; }
   if(DATA.some(l=>l.id===id)){ showToast('Já existe uma licença com esse ID'); return; }
+  const unit = MODEL.units.find(item=>item.id === document.getElementById('nl_unidade').value);
+  if(!unit){ showToast('Selecione uma unidade cadastrada'); return; }
   const lic = {
     id,
-    unidade: document.getElementById('nl_unidade').value.trim(),
-    cidade: document.getElementById('nl_cidade').value.trim(),
-    uf: document.getElementById('nl_uf').value.trim().toUpperCase(),
+    unidadeId: unit.id,
+    unidade: unit.nome,
+    cidade: unit.cidade,
+    uf: unit.uf,
     razaoSocial: document.getElementById('nl_razao').value.trim(),
     endereco: '',
     cnpj: '',
@@ -794,6 +904,10 @@ document.getElementById('btnSaveNewLic').addEventListener('click', async ()=>{
   const saving = saveData();
   closeModal('overlayNewLic');
   expandedIds.add(id);
+  document.getElementById('fUnidade').value = '';
+  document.getElementById('fStatus').value = '';
+  document.getElementById('fRisco').value = '';
+  document.getElementById('fBusca').value = '';
   render();
   ['nl_id','nl_unidade','nl_cidade','nl_uf','nl_razao','nl_categoria','nl_orgao','nl_tipo','nl_emissao','nl_vencimento','nl_notes']
     .forEach(i=>document.getElementById(i).value='');
@@ -973,7 +1087,7 @@ function buildAndPrintReport(){
 function setAppReady(ready){
   appReady = ready;
   document.querySelector('main').inert = !ready;
-  ['btnNewLic', 'btnReset', 'btnExport', 'btnSync', 'btnReloadServer', 'btnImportLocal']
+  ['btnNewLic', 'btnNewUnit', 'btnReset', 'btnExport', 'btnSync', 'btnReloadServer', 'btnImportLocal']
     .forEach(id=>document.getElementById(id).disabled = !ready);
   ['btnSync', 'btnReloadServer', 'btnImportLocal']
     .forEach(id=>document.getElementById(id).hidden = !remoteEnabled);
@@ -981,7 +1095,7 @@ function setAppReady(ready){
 
 function refreshWhenIdle(){
   if(document.hidden || document.activeElement?.matches('input, textarea, select')
-    || document.querySelector('#overlayNewLic.show')) return;
+    || document.querySelector('#overlayNewLic.show, #overlayUnit.show')) return;
   void refreshFromServer();
 }
 
