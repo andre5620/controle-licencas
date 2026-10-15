@@ -27,15 +27,20 @@
       <span class="today-chip" id="todayChip"></span>
       <span class="user-chip" id="userChip" hidden></span>
       <button class="btn btn-ghost" id="btnSignOut" type="button" hidden>Sair</button>
-      <span class="save-state"><span class="save-dot" id="saveDot"></span><span id="saveText">salvo</span></span>
-      <button class="btn" id="btnReset">Restaurar dados</button>
-      <button class="btn btn-accent" id="btnExport">Exportar relatório</button>
-      <button class="btn btn-primary" id="btnNewLic">+ Nova licença</button>
+      <span class="save-state" role="status" aria-live="polite"><span class="save-dot" id="saveDot"></span><span id="saveText">conectando...</span></span>
+      <button class="btn" id="btnSync" hidden disabled>Sincronizar</button>
+      <button class="btn" id="btnReloadServer" hidden disabled>Carregar servidor</button>
+      <button class="btn" id="btnImportLocal" hidden disabled>Importar dados locais</button>
+      <button class="btn" id="btnReset" disabled>Restaurar dados</button>
+      <button class="btn btn-accent" id="btnExport" disabled>Exportar relatório</button>
+      <button class="btn btn-primary" id="btnNewLic" disabled>+ Nova licença</button>
     </div>
   </div>
 </header>
 
-<main>
+<p class="sync-message" id="syncMessage" role="status" aria-live="polite" hidden></p>
+
+<main inert>
   <div class="kpi-row" id="kpiRow"></div>
 
   <div class="filters">
@@ -61,7 +66,7 @@
 </main>
 
 <footer class="app-footer">
-  Dados carregados a partir de "CONTROLE DE LICENÇAS REGULATÓRIAS — SOLINFTEC". Edições ficam salvas neste navegador. Validação final das informações regulatórias é sempre humana, conforme normas vigentes.
+  Base compartilhada via Supabase quando configurado. Confira o indicador de sincronização: alterações pendentes ainda não estão disponíveis aos colaboradores. Validação final das informações regulatórias é sempre humana, conforme normas vigentes.
   <span class="app-version" id="appVersion"></span>
 </footer>
 

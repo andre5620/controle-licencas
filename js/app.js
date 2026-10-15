@@ -3,13 +3,23 @@ const DEFAULT_MODEL = window.DEFAULT_MODEL || null;
 const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const STORAGE_KEY = 'licencas-solinftec-v1';
 let MODEL = null;
 let DATA = [];
 let expandedIds = new Set();
 let activeView = 'list';
 let activePanel = 'license';
+const remoteEnabled = Boolean(window.SUPABASE_CONFIG?.required || window.LicenseDataService?.enabled);
+let cacheKey = STORAGE_KEY;
+let authenticatedUserId = null;
+let remoteRevision = 0;
+let pendingChanges = false;
+let conflict = false;
+let editGeneration = 0;
+let saveQueue = Promise.resolve();
+let appReady = false;
+let refreshing = false;
 
 const todayStr = () => new Date().toISOString().slice(0,10);
 const fmtDate = (iso) => {
@@ -28,33 +38,55 @@ const daysUntil = (iso) => {
    PERSISTENCE
 --------------------------------------------------------------- */
 async function loadData(){
-  if(window.LicenseDataService?.enabled){
-    try{
-      const remoteModel = await window.LicenseDataService.load();
-      if(remoteModel){
-        MODEL = applyReferenceData(remoteModel);
-        DATA = flattenModel(MODEL);
-        return;
+  if(remoteEnabled){
+    const remote = await window.LicenseDataService.load();
+    cacheKey = `${STORAGE_KEY}:${authenticatedUserId}:${remote.organizationId}`;
+    const draft = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    remoteRevision = remote.revision;
+    if(draft?.pending){
+      if(!isStructuredModel(draft.model) || !Number.isSafeInteger(draft.revision)){
+        throw new Error('O rascunho local é inválido. Preserve uma cópia antes de limpar o armazenamento do navegador.');
       }
-    }catch(e){ /* usa o cache local quando a base remota não estiver disponível */ }
-  }
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw){
-      const stored = JSON.parse(raw);
-      const isModel = stored.units && stored.processTypes && stored.processes;
-      MODEL = isModel ? applyReferenceData(stored) : modelFromLegacyData(stored);
+      MODEL = applyReferenceData(draft.model);
       DATA = flattenModel(MODEL);
-      if(!isModel) await saveData(true);
+      remoteRevision = draft.revision;
+      pendingChanges = true;
+      conflict = draft.revision !== remote.revision;
+      setSaveState('var(--amber)', 'alterações pendentes',
+        conflict ? 'A base central mudou. Exporte seu relatório antes de carregar a versão do servidor.'
+          : 'Há alterações locais não sincronizadas. Clique em Sincronizar para enviá-las.');
       return;
     }
-  }catch(e){ /* key doesn't exist yet */ }
+    if(remote.model){
+      MODEL = applyReferenceData(remote.model);
+      DATA = flattenModel(MODEL);
+      if(remote.revision === 0) await saveData();
+      else{
+        cacheModel(false);
+        setSaveState('var(--green)', 'sincronizado');
+      }
+      return;
+    }
+  }else{
+    const raw = localStorage.getItem(cacheKey);
+    if(raw){
+      const stored = JSON.parse(raw);
+      MODEL = isStructuredModel(stored) ? applyReferenceData(stored) : modelFromLegacyData(stored);
+      DATA = flattenModel(MODEL);
+      setSaveState('var(--amber)', 'salvo só neste navegador');
+      return;
+    }
+  }
   MODEL = DEFAULT_MODEL
     ? JSON.parse(JSON.stringify(DEFAULT_MODEL))
     : modelFromLegacyData(DEFAULT_DATA);
   MODEL = applyReferenceData(MODEL);
   DATA = flattenModel(MODEL);
-  await saveData(true);
+  await saveData();
+}
+
+function isStructuredModel(model){
+  return model && Array.isArray(model.units) && Array.isArray(model.processTypes) && Array.isArray(model.processes);
 }
 
 function modelFromLegacyData(records){
@@ -62,11 +94,22 @@ function modelFromLegacyData(records){
   const unitByKey = new Map();
   const processTypes = [];
   const typeByKey = new Map();
+  const previousUnits = MODEL?.units || [];
+  const previousTypes = MODEL?.processTypes || [];
+  const nextId = (prefix, previous, current)=>{
+    const used = new Set([...previous, ...current].map(item=>item.id));
+    let number = 1;
+    while(used.has(`${prefix}-${String(number).padStart(3,'0')}`)) number++;
+    return `${prefix}-${String(number).padStart(3,'0')}`;
+  };
   const processes = records.map(record=>{
     const unitKey = `${record.unidade}|${record.cidade}|${record.uf}`;
     if(!unitByKey.has(unitKey)){
+      const previous = previousUnits.find(unit=>
+        `${unit.nome || unit.codigo}|${unit.cidade}|${unit.uf}` === unitKey);
       const unit = {
-        id: `U-${String(units.length+1).padStart(3,'0')}`,
+        ...previous,
+        id: previous?.id || nextId('U', previousUnits, units),
         codigo: record.unidade,
         nome: record.unidade,
         razaoSocial: record.razaoSocial || '',
@@ -74,26 +117,29 @@ function modelFromLegacyData(records){
         endereco: record.endereco || '',
         cidade: record.cidade || '',
         uf: record.uf || '',
-        caracteristicasOperacionais: '',
-        caracteristicasAmbientais: '',
+        caracteristicasOperacionais: previous?.caracteristicasOperacionais || '',
+        caracteristicasAmbientais: previous?.caracteristicasAmbientais || '',
         risco: record.risco || 'NA',
-        status: 'Ativa',
-        observacoes: ''
+        status: previous?.status || 'Ativa',
+        observacoes: previous?.observacoes || ''
       };
       units.push(unit);
       unitByKey.set(unitKey, unit);
     }
     const typeKey = `${record.categoria}|${record.tipoLicenca}|${record.orgaoEmissor}`;
     if(!typeByKey.has(typeKey)){
+      const previous = previousTypes.find(type=>
+        `${type.categoria}|${type.nome}|${type.orgaoEsperado}` === typeKey);
       const type = {
-        id: `TP-${String(processTypes.length+1).padStart(3,'0')}`,
+        ...previous,
+        id: previous?.id || nextId('TP', previousTypes, processTypes),
         codigo: record.tipoLicenca || `TIPO-${processTypes.length+1}`,
         nome: record.tipoLicenca || record.categoria || 'Processo regulatório',
         categoria: record.categoria || '',
         orgaoEsperado: record.orgaoEmissor || '',
-        periodicidade: '',
-        prazoPadraoDias: '',
-        etapasPadrao: (record.activities || []).map((activity, index)=>({
+        periodicidade: previous?.periodicidade || '',
+        prazoPadraoDias: previous?.prazoPadraoDias || '',
+        etapasPadrao: previous?.etapasPadrao || (record.activities || []).map((activity, index)=>({
           id: `ET-${String(index+1).padStart(3,'0')}`,
           ordem: index + 1,
           nome: activity.name || `Etapa ${index+1}`,
@@ -114,11 +160,11 @@ function modelFromLegacyData(records){
       tipoProcessoId: type.id,
       etapas: (record.activities || []).map((activity, index)=>({
         ...activity,
-        id: `EP-${record.id}-${String(index+1).padStart(2,'0')}`,
-        etapaPadraoId: type.etapasPadrao[index]?.id || '',
+        id: activity.id || `EP-${record.id}-${String(index+1).padStart(2,'0')}`,
+        etapaPadraoId: activity.etapaPadraoId || type.etapasPadrao[index]?.id || '',
         dataPlanejada: activity.date || '',
-        dataRealizada: '',
-        desvioModelo: false
+        dataRealizada: activity.dataRealizada || '',
+        desvioModelo: Boolean(activity.desvioModelo)
       }))
     };
   });
@@ -179,30 +225,86 @@ function flattenModel(model){
   });
 }
 
-let saveTimer = null;
-async function saveData(silent){
-  const dot = document.getElementById('saveDot');
-  const txt = document.getElementById('saveText');
-  dot.style.background = 'var(--amber)';
-  txt.textContent = 'salvando...';
-  clearTimeout(saveTimer);
-  return new Promise(resolve=>{
-    saveTimer = setTimeout(async ()=>{
-      try{
-        MODEL = modelFromLegacyData(DATA);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(MODEL));
-        if(window.LicenseDataService?.enabled){
-          await window.LicenseDataService.save(MODEL);
-        }
-        dot.style.background = 'var(--green)';
-        txt.textContent = 'salvo';
-      }catch(e){
-        dot.style.background = 'var(--red)';
-        txt.textContent = 'erro ao salvar';
+function setSaveState(color, text, message = ''){
+  document.getElementById('saveDot').style.background = color;
+  document.getElementById('saveText').textContent = text;
+  const notice = document.getElementById('syncMessage');
+  notice.textContent = message;
+  notice.hidden = !message;
+}
+
+function cacheModel(pending){
+  localStorage.setItem(cacheKey, JSON.stringify(remoteEnabled
+    ? {model: MODEL, revision: remoteRevision, pending} : MODEL));
+}
+
+function reportSyncError(error){
+  console.error('Falha na sincronização de licenças:', error);
+  if(error.code === '40001') conflict = true;
+  setSaveState('var(--red)', pendingChanges ? 'não sincronizado' : 'erro de conexão',
+    conflict
+      ? 'Outra pessoa atualizou a base. Suas alterações continuam neste navegador. Exporte o relatório para preservá-las antes de carregar a versão do servidor.'
+      : `${error.message || 'Não foi possível sincronizar.'} ${pendingChanges ? 'Alterações pendentes; clique em Sincronizar para tentar novamente.' : ''}`);
+}
+
+function saveData(){
+  const generation = ++editGeneration;
+  pendingChanges = true;
+  MODEL = modelFromLegacyData(DATA);
+  const snapshot = JSON.parse(JSON.stringify(MODEL));
+  try{
+    cacheModel(true);
+  }catch(error){
+    reportSyncError(error);
+    return Promise.resolve(false);
+  }
+  setSaveState('var(--amber)', remoteEnabled ? 'sincronizando...' : 'salvando localmente...');
+  saveQueue = saveQueue.then(async ()=>{
+    if(generation !== editGeneration) return false;
+    try{
+      if(remoteEnabled){
+        if(conflict) throw new Error('Carregue a versão do servidor para resolver o conflito.');
+        remoteRevision = await window.LicenseDataService.save(snapshot, remoteRevision);
       }
-      resolve();
-    }, silent ? 0 : 400);
+      pendingChanges = generation !== editGeneration;
+      cacheModel(pendingChanges);
+      if(!pendingChanges){
+        setSaveState(remoteEnabled ? 'var(--green)' : 'var(--amber)',
+          remoteEnabled ? 'sincronizado' : 'salvo só neste navegador');
+      }
+      return true;
+    }catch(error){
+      reportSyncError(error);
+      return false;
+    }
   });
+  return saveQueue;
+}
+
+async function refreshFromServer(discardPending = false){
+  if(!remoteEnabled || !appReady || refreshing || (pendingChanges && !discardPending)) return;
+  refreshing = true;
+  const generation = editGeneration;
+  try{
+    await saveQueue;
+    const remote = await window.LicenseDataService.load();
+    if(generation !== editGeneration || (pendingChanges && !discardPending)) return;
+    if(!remote.model) throw new Error('A base central ainda não foi inicializada.');
+    if(remote.revision !== remoteRevision || discardPending){
+      MODEL = applyReferenceData(remote.model);
+      DATA = flattenModel(MODEL);
+      remoteRevision = remote.revision;
+      pendingChanges = false;
+      conflict = false;
+      cacheModel(false);
+      render();
+    }
+    setSaveState('var(--green)', 'sincronizado');
+  }catch(error){
+    reportSyncError(error);
+  }finally{
+    refreshing = false;
+  }
 }
 
 /* ---------------------------------------------------------------
@@ -574,33 +676,33 @@ function attachCardEvents(){
         render();
       });
     });
-    tr.querySelector('[data-del-act]').addEventListener('click', ()=>{
+    tr.querySelector('[data-del-act]').addEventListener('click', async ()=>{
       lic.activities.splice(idx,1);
-      saveData();
+      const saving = saveData();
       render();
-      showToast('Atividade removida');
+      showToast(await saving ? 'Atividade removida' : 'Remoção pendente de sincronização');
     });
   });
 
   document.querySelectorAll('[data-add-act]').forEach(btn=>{
-    btn.addEventListener('click', e=>{
+    btn.addEventListener('click', async e=>{
       e.stopPropagation();
       const lic = DATA.find(l=>l.id===btn.dataset.addAct);
       lic.activities.push({name:'Nova atividade', owner:'', status:'Não iniciado', date:'', observacao:''});
-      saveData();
+      const saving = saveData();
       render();
-      showToast('Atividade adicionada');
+      showToast(await saving ? 'Atividade adicionada' : 'Atividade pendente de sincronização');
     });
   });
 
   document.querySelectorAll('[data-del-lic]').forEach(btn=>{
-    btn.addEventListener('click', e=>{
+    btn.addEventListener('click', async e=>{
       e.stopPropagation();
-      if(!confirm(`Excluir a licença ${btn.dataset.delLic}? Esta ação não pode ser desfeita.`)) return;
+      if(!confirm(`Excluir a licença ${btn.dataset.delLic}${remoteEnabled ? ' para todos os colaboradores' : ''}? Esta ação não pode ser desfeita.`)) return;
       DATA = DATA.filter(l=>l.id!==btn.dataset.delLic);
-      saveData();
+      const saving = saveData();
       render();
-      showToast('Licença excluída');
+      showToast(await saving ? 'Licença excluída' : 'Exclusão pendente de sincronização');
     });
   });
 }
@@ -622,15 +724,48 @@ document.getElementById('btnClearFilters').addEventListener('click', ()=>{
 });
 
 document.getElementById('btnReset').addEventListener('click', async ()=>{
-  if(!confirm('Restaurar os dados originais da planilha? Todas as edições feitas neste navegador serão perdidas.')) return;
+  if(!confirm(remoteEnabled
+    ? 'Restaurar os dados originais para TODOS os colaboradores? As alterações da base central serão substituídas.'
+    : 'Restaurar os dados originais da planilha? Todas as edições feitas neste navegador serão perdidas.')) return;
   DATA = JSON.parse(JSON.stringify(DEFAULT_DATA));
-  await saveData(true);
+  MODEL = null;
+  const saved = await saveData();
   render();
-  showToast('Dados originais restaurados');
+  showToast(saved ? 'Dados originais restaurados' : 'Restauração pendente de sincronização');
+});
+
+document.getElementById('btnSync').addEventListener('click', async ()=>{
+  if(pendingChanges) await saveData();
+  else await refreshFromServer();
+});
+
+document.getElementById('btnReloadServer').addEventListener('click', async ()=>{
+  if(pendingChanges && !confirm('Descartar as alterações pendentes deste navegador e carregar a base central? Exporte o relatório antes, se precisar preservá-las.')) return;
+  await refreshFromServer(true);
+});
+
+document.getElementById('btnImportLocal').addEventListener('click', async ()=>{
+  try{
+    if(conflict) throw new Error('Carregue a versão do servidor antes de importar.');
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) throw new Error('Não há dados do modo local neste navegador.');
+    const stored = JSON.parse(raw);
+    if(!isStructuredModel(stored) && !Array.isArray(stored)){
+      throw new Error('Os dados locais não têm um formato válido.');
+    }
+    if(!confirm('Substituir a base central pelos dados antigos deste navegador? Isso afetará todos os colaboradores da organização.')) return;
+    MODEL = isStructuredModel(stored) ? applyReferenceData(stored) : modelFromLegacyData(stored);
+    DATA = flattenModel(MODEL);
+    const saved = await saveData();
+    render();
+    showToast(saved ? 'Dados locais enviados ao servidor' : 'Importação pendente de sincronização');
+  }catch(error){
+    reportSyncError(error);
+  }
 });
 
 document.getElementById('btnNewLic').addEventListener('click', ()=>openModal('overlayNewLic'));
-document.getElementById('btnSaveNewLic').addEventListener('click', ()=>{
+document.getElementById('btnSaveNewLic').addEventListener('click', async ()=>{
   const id = document.getElementById('nl_id').value.trim();
   if(!id){ showToast('Informe um ID para a licença'); return; }
   if(DATA.some(l=>l.id===id)){ showToast('Já existe uma licença com esse ID'); return; }
@@ -656,13 +791,13 @@ document.getElementById('btnSaveNewLic').addEventListener('click', ()=>{
     activities: []
   };
   DATA.push(lic);
-  saveData();
+  const saving = saveData();
   closeModal('overlayNewLic');
   expandedIds.add(id);
   render();
-  showToast('Licença criada');
   ['nl_id','nl_unidade','nl_cidade','nl_uf','nl_razao','nl_categoria','nl_orgao','nl_tipo','nl_emissao','nl_vencimento','nl_notes']
     .forEach(i=>document.getElementById(i).value='');
+  showToast(await saving ? 'Licença criada' : 'Licença criada localmente; sincronização pendente');
 });
 
 /* ---------------------------------------------------------------
@@ -687,9 +822,11 @@ function showAuthError(message){
 
 async function startAuthenticatedApp(session){
   setAuthenticatedUser(session);
-  closeModal('overlayAuth');
+  authenticatedUserId = session.user.id;
   await loadData();
   render();
+  setAppReady(true);
+  closeModal('overlayAuth');
 }
 
 document.getElementById('authForm').addEventListener('submit', async event=>{
@@ -712,8 +849,14 @@ document.getElementById('authForm').addEventListener('submit', async event=>{
 });
 
 document.getElementById('btnSignOut').addEventListener('click', async ()=>{
-  await window.LicenseDataService.auth.signOut();
-  window.location.reload();
+  if(pendingChanges && !confirm('Há alterações não sincronizadas. Elas permanecerão como rascunho neste navegador. Deseja sair?')) return;
+  try{
+    await saveQueue;
+    await window.LicenseDataService.auth.signOut();
+    window.location.reload();
+  }catch(error){
+    reportSyncError(error);
+  }
 });
 
 function buildAndPrintReport(){
@@ -827,12 +970,38 @@ function buildAndPrintReport(){
 /* ---------------------------------------------------------------
    INIT
 --------------------------------------------------------------- */
+function setAppReady(ready){
+  appReady = ready;
+  document.querySelector('main').inert = !ready;
+  ['btnNewLic', 'btnReset', 'btnExport', 'btnSync', 'btnReloadServer', 'btnImportLocal']
+    .forEach(id=>document.getElementById(id).disabled = !ready);
+  ['btnSync', 'btnReloadServer', 'btnImportLocal']
+    .forEach(id=>document.getElementById(id).hidden = !remoteEnabled);
+}
+
+function refreshWhenIdle(){
+  if(document.hidden || document.activeElement?.matches('input, textarea, select')
+    || document.querySelector('#overlayNewLic.show')) return;
+  void refreshFromServer();
+}
+
+window.addEventListener('focus', refreshWhenIdle);
+window.addEventListener('online', refreshWhenIdle);
+window.addEventListener('beforeunload', event=>{
+  if(!pendingChanges) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+setInterval(refreshWhenIdle, 15000);
+
 (async function init(){
+  setAppReady(false);
   document.getElementById('todayChip').textContent = 'Hoje: ' + fmtDate(todayStr());
   const versionEl = document.getElementById('appVersion');
   if(versionEl) versionEl.textContent = 'v' + APP_VERSION;
-  if(window.LicenseDataService?.enabled){
+  if(remoteEnabled){
     try{
+      if(!window.LicenseDataService) throw new Error('O serviço de dados não carregou. Recarregue a página.');
       const session = await window.LicenseDataService.auth.getSession();
       if(!session){
         openModal('overlayAuth');
@@ -841,11 +1010,17 @@ function buildAndPrintReport(){
       await startAuthenticatedApp(session);
       return;
     }catch(error){
+      console.error('Falha ao abrir a base central:', error);
       openModal('overlayAuth');
-      showAuthError('Não foi possível conectar ao Supabase.');
+      showAuthError(`Não foi possível abrir a base central: ${error.message || 'confira a conexão e execute as migrações SQL.'}`);
       return;
     }
   }
-  await loadData();
-  render();
+  try{
+    await loadData();
+    render();
+    setAppReady(true);
+  }catch(error){
+    reportSyncError(error);
+  }
 })();
