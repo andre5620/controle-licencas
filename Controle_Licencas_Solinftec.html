@@ -50,7 +50,7 @@
     <select id="fRisco"><option value="">Todos os riscos</option></select>
     <input type="text" id="fBusca" placeholder="Buscar por ID, tipo, órgão emissor...">
     <div class="spacer"></div>
-    <div class="view-switch" role="group" aria-label="Visualização">
+    <div class="view-switch" id="viewSwitch" role="group" aria-label="Visualização">
       <button class="view-btn active" id="btnListView" type="button">Lista</button>
       <button class="view-btn" id="btnGanttView" type="button">Gantt</button>
     </div>
@@ -60,9 +60,11 @@
   <div class="panel-switch" role="group" aria-label="Painel principal">
     <button class="view-btn" id="btnLicensePanel" type="button">Por licença</button>
     <button class="view-btn active" id="btnUnitPanel" type="button">Por unidade</button>
+    <button class="view-btn" id="btnCalendarPanel" type="button">Calendário</button>
   </div>
   <div id="licList" hidden></div>
   <div id="unitPanel"></div>
+  <div id="calendarPanel" hidden></div>
   <div id="ganttView" hidden></div>
 </main>
 
@@ -90,7 +92,11 @@
       </div>
       <div class="field">
         <label>Status</label>
-        <select id="nl_status"><option>Pendente</option><option>Condicionada</option><option>Obtida</option><option>Dispensada</option></select>
+        <select id="nl_status"><option>Pendente</option><option>Em análise</option><option>Condicionada</option><option>Obtida</option><option>Dispensada</option><option>Indeferida</option><option>Não aplicável</option></select>
+      </div>
+      <div class="field wide">
+        <label for="nl_fluxo">Fluxo do processo</label>
+        <select id="nl_fluxo"><option value="licenca">Regulatório Licenças</option><option value="outorga">Regulatório Outorgas</option><option value="">Sem fluxo</option></select>
       </div>
       <div class="field"><label>Data de Emissão</label><input type="date" id="nl_emissao"></div>
       <div class="field"><label>Vencimento</label><input type="date" id="nl_vencimento"></div>
@@ -166,6 +172,7 @@
 
 <script src="data/licencas.js"></script>
 <script src="data/fluxo.js"></script>
+<script src="data/fluxos-processo.js"></script>
 <script src="data/licencas_planilha.js"></script>
 <script src="data/supabase-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>

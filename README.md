@@ -8,6 +8,7 @@ Painel web para acompanhamento de licencas regulatorias.
 - `css/styles.css`: estilos, responsividade e regras de impressao.
 - `data/licencas.js`: registros padrao usados na inicializacao e na migracao do modelo estruturado.
 - `data/fluxo.js`: fluxo transversal e perfis das unidades extraidos de `Controle de etapas - Fluxo.xlsx`.
+- `data/fluxos-processo.js`: fluxogramas de Licencas e de Outorgas (Sustentabilidade, v1.0), com etapas, areas responsaveis e decisoes.
 - `data/licencas_planilha.js`: obrigacoes ambientais da tabela 3 por unidade.
 - `data/supabase-config.js`: URL e chave publica opcionais do Supabase.
 - `js/app.js`: filtros, edicao, persistencia, atividades e relatorio.
@@ -56,6 +57,39 @@ Na unidade e no card de cada licenca, use **+ Vincular comprovante**. Informe um
 Sao aceitos links HTTPS de `1drv.ms`, `onedrive.live.com` e subdominios corporativos de `sharepoint.com` (OneDrive empresarial). Outros enderecos sao recusados com mensagem de erro. O painel nao faz upload, nao copia arquivos e nao altera permissoes: configure o compartilhamento no OneDrive para as pessoas que precisam consultar os comprovantes. Todos os colaboradores com acesso a base veem os links, mas apenas quem tiver permissao no OneDrive consegue abrir os arquivos. Nao use links com acesso publico se o comprovante for restrito.
 
 Os vinculos e perfis sao salvos no modelo central existente, sem nova migracao SQL ou integracao com Microsoft Graph. Aguarde **sincronizado** antes de fechar a pagina.
+
+### Fluxo do processo (Licencas e Outorgas)
+
+Cada licenca pode seguir um dos fluxogramas da Sustentabilidade: **Regulatorio Licencas** ou **Regulatorio Outorgas**. Ao aplicar o fluxo, as etapas sao criadas na tabela de atividades com a area responsavel de cada raia (Sustentabilidade, Areas internas, Fabrica/Facilities, Fiscal/Financeiro).
+
+- Novas licencas recebem o fluxo escolhido no formulario. O fluxo de Outorgas e sugerido quando a categoria ou o tipo menciona "outorga".
+- Licencas ja cadastradas mostram o botao **Aplicar fluxo**. Ele acrescenta as etapas no inicio da tabela e mantem as atividades existentes.
+- O card mostra a etapa atual. Use **Concluir etapa** ou altere o status da atividade na tabela; `N/A` tambem conta como concluida.
+- Nas decisoes do fluxograma, escolha a resposta pelos botoes. Cada resposta fica registrada no historico do fluxo:
+  - **Jurisdicao (Brasil)**: "Nao" encerra o fluxo com status *Nao aplicavel*.
+  - **Licenca exigida ou dispensa**: "Dispensa" cria a etapa de registro da dispensa e marca a licenca como *Dispensada*.
+  - **Ha taxa aplicavel?** (Outorgas): "Nao" marca o pagamento como `N/A`.
+  - **Resultado do orgao**:
+    - *Emitida* muda o status para *Obtida*.
+    - *Pendencia* cria a etapa "Atender a pendencia" e volta ao envio. As etapas de boleto e pagamento ja concluidas nao sao repetidas.
+    - *Indeferida* cria a etapa de consultoria/juridico (Licencas) ou de alternativas de abastecimento (Outorgas) e reinicia o processo a partir do acesso ao sistema do orgao.
+- Ao chegar na espera pela emissao, a licenca passa automaticamente para *Em analise*.
+- Depois de concluido, **Iniciar novo ciclo** volta as etapas para "Nao iniciado" na proxima renovacao, preservando o historico.
+
+Os status *Em analise*, *Indeferida* e *Nao aplicavel* foram acrescentados. Os dados do fluxo ficam no modelo central existente, sem nova migracao SQL.
+
+### Calendario (ciclo mensal)
+
+A aba **Calendario** reproduz o inicio dos fluxogramas: consultar o calendario de vencimentos e verificar se a janela esta aberta. A janela de renovacao abre 120 dias antes do vencimento. O prazo pode ser alterado no campo **Janela de renovacao (dias)** de cada licenca.
+
+Para o mes selecionado, o painel separa:
+
+- licencas com a janela aberta (acao neste ciclo);
+- licencas vencidas;
+- licencas que aguardam o proximo ciclo;
+- licencas sem data de vencimento.
+
+Cada item mostra a etapa atual do fluxo e abre a licenca. Os filtros de unidade, status, risco e busca tambem se aplicam ao calendario.
 
 Ao criar uma licenca, selecione uma unidade cadastrada. Cidade e UF sao preenchidas automaticamente e devem ser alteradas no cadastro da unidade, nao individualmente na licenca. O botao **+ Nova licenca** de cada unidade ja seleciona esse cadastro. Excluir a ultima licenca nao exclui a unidade.
 

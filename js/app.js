@@ -2,8 +2,13 @@ const DEFAULT_DATA = window.DEFAULT_DATA;
 const DEFAULT_MODEL = window.DEFAULT_MODEL || null;
 const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
+const PROCESS_FLOWS = window.PROCESS_FLOWS || {};
 
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
+const LICENSE_STATUSES = ['Pendente','Em análise','Condicionada','Obtida','Dispensada','Indeferida','Não aplicável'];
+const OPEN_STATUSES = ['Pendente','Em análise','Condicionada','Indeferida'];
+const ACTIVITY_STATUSES = ['Não iniciado','Working on it','Stuck','Done','N/A'];
+const STEP_DONE = ['Done','N/A'];
 const PROFILE_FIELDS = [
   ['Razão social', 'razaoSocial'], ['CNPJ', 'cnpj'], ['Endereço', 'endereco'],
   ['Atividade ambiental', 'atividadeAmbiental'], ['Atividades conduzidas', 'atividadesConduzidas'],
@@ -247,6 +252,251 @@ function flattenModel(model){
   });
 }
 
+/* ---------------------------------------------------------------
+   PROCESS FLOW (fluxograma de Licenças e Outorgas)
+--------------------------------------------------------------- */
+function suggestedFlowType(lic){
+  return /outorga/i.test(`${lic.categoria || ''} ${lic.tipoLicenca || ''}`) ? 'outorga' : 'licenca';
+}
+
+function flowNode(def, id){
+  return def.nos.find(node=>node.id === id) || def.etapasFinais?.[id] || null;
+}
+
+function flowOrder(def){
+  return [...def.nos.map(node=>node.id), ...Object.keys(def.etapasFinais || {})];
+}
+
+function flowActivity(lic, id){
+  return (lic.activities || []).find(activity=>activity.etapaPadraoId === id);
+}
+
+function stepDone(lic, id){
+  return STEP_DONE.includes(flowActivity(lic, id)?.status);
+}
+
+/* Percorre o fluxograma: etapas concluídas avançam; decisões registradas escolhem o caminho. */
+function walkFlow(lic){
+  const def = PROCESS_FLOWS[lic.fluxo?.tipo];
+  if(!def) return null;
+  const decisions = lic.fluxo.decisoes || {};
+  const extras = lic.fluxo.extras || [];
+  const items = [];
+  let current = null;
+  for(const node of def.nos){
+    if(node.condicional && !extras.includes(node.id)) continue;
+    if(node.decisao){
+      const option = node.opcoes.find(item=>item.id === decisions[node.id]);
+      const item = {node, option, state: option ? 'feito' : current ? 'futuro' : 'atual'};
+      items.push(item);
+      if(current) continue;
+      if(!option){
+        current = item;
+        continue;
+      }
+      if(option.fim){
+        const final = option.etapa && flowNode(def, option.etapa);
+        if(final){
+          const done = stepDone(lic, final.id);
+          const finalItem = {node: final, state: done ? 'feito' : 'atual'};
+          items.push(finalItem);
+          if(!done) return {def, items, current: finalItem, fim: null};
+        }
+        return {def, items, current: null, fim: option.fim};
+      }
+      continue;
+    }
+    const done = stepDone(lic, node.id);
+    const item = {node, state: done ? 'feito' : current ? 'futuro' : 'atual'};
+    items.push(item);
+    if(!current && !done) current = item;
+  }
+  return {def, items, current, fim: current ? null : def.fim};
+}
+
+function currentFlowNodeId(lic){
+  return walkFlow(lic)?.current?.node.id || null;
+}
+
+function flowSummary(lic){
+  const flow = walkFlow(lic);
+  if(!flow) return 'Fluxo não aplicado';
+  if(flow.fim) return `Concluído: ${flow.fim}`;
+  const node = flow.current.node;
+  return node.decisao ? `Decisão: ${node.decisao}` : `Etapa atual: ${node.nome}`;
+}
+
+function ensureFlowActivity(lic, def, node){
+  const existing = flowActivity(lic, node.id);
+  if(existing) return existing;
+  const activity = {
+    id: `${lic.id}-${node.id}`, etapaPadraoId: node.id, name: node.nome,
+    owner: node.area || '', status: 'Não iniciado', date: '', observacao: ''
+  };
+  const order = flowOrder(def);
+  const rank = order.indexOf(node.id);
+  lic.activities = lic.activities || [];
+  let position = lic.activities.findIndex(item=>order.indexOf(item.etapaPadraoId) > rank);
+  if(position < 0){
+    position = lic.activities.reduce((last, item, index)=>order.includes(item.etapaPadraoId) ? index + 1 : last, 0);
+  }
+  lic.activities.splice(position, 0, activity);
+  return activity;
+}
+
+function resetFlowActivity(activity){
+  Object.assign(activity, {status: 'Não iniciado', dataRealizada: ''});
+  if(activity.puladaPeloFluxo){
+    activity.observacao = '';
+    delete activity.puladaPeloFluxo;
+  }
+}
+
+function addFlowHistory(lic, texto){
+  lic.fluxo.historico = [...(lic.fluxo.historico || []), {data: todayStr(), ciclo: lic.fluxo.ciclo, texto}].slice(-100);
+}
+
+/* Etapas que só aparecem em um caminho (pendência, indeferimento) saem quando o caminho é abandonado. */
+function dropConditionalStep(lic, id){
+  lic.fluxo.extras = (lic.fluxo.extras || []).filter(item=>item !== id);
+  lic.activities = (lic.activities || []).filter(activity=>activity.etapaPadraoId !== id || activity.status === 'Done');
+}
+
+/* Ao chegar na espera pelo órgão, a licença passa a "Em análise". */
+function syncFlowStatus(lic, previousNodeId){
+  const node = walkFlow(lic)?.current?.node;
+  if(node?.analise && node.id !== previousNodeId) lic.status = 'Em análise';
+}
+
+function applyFlow(lic, tipo){
+  const def = PROCESS_FLOWS[tipo];
+  if(!def) throw new Error('Selecione um fluxo válido.');
+  if(lic.fluxo) throw new Error('Esta licença já segue um fluxo.');
+  lic.fluxo = {tipo, ciclo: 1, decisoes: {}, extras: [], historico: []};
+  def.nos.filter(node=>!node.decisao && !node.condicional).forEach(node=>ensureFlowActivity(lic, def, node));
+  addFlowHistory(lic, `Fluxo ${def.nome} aplicado`);
+}
+
+function completeFlowStep(lic, stepId){
+  const flow = walkFlow(lic);
+  const node = flow?.current?.node;
+  if(!node || node.decisao || node.id !== stepId){
+    throw new Error('Esta etapa não é mais a etapa atual. Carregue o servidor.');
+  }
+  const activity = ensureFlowActivity(lic, flow.def, node);
+  activity.status = 'Done';
+  activity.dataRealizada = todayStr();
+  syncFlowStatus(lic, stepId);
+}
+
+function decideFlow(lic, gateId, optionId){
+  const flow = walkFlow(lic);
+  const node = flow?.current?.node;
+  if(!node?.decisao || node.id !== gateId){
+    throw new Error('Esta decisão não está mais pendente. Carregue o servidor.');
+  }
+  const option = node.opcoes.find(item=>item.id === optionId);
+  if(!option) throw new Error('Opção inválida para esta decisão.');
+  const {def} = flow;
+  const state = lic.fluxo;
+  state.decisoes = state.decisoes || {};
+  state.extras = state.extras || [];
+  if(option.retorna){
+    const from = def.nos.findIndex(item=>item.id === option.retorna);
+    const to = def.nos.findIndex(item=>item.id === gateId);
+    if(!state.extras.includes(option.retorna)) state.extras.push(option.retorna);
+    ensureFlowActivity(lic, def, def.nos[from]);
+    def.nos.slice(from, to + 1).forEach(item=>{
+      if(item.condicional && item.id !== option.retorna){
+        if(option.reiniciaTudo) dropConditionalStep(lic, item.id);
+        return;
+      }
+      if(item.repete === false && !option.reiniciaTudo) return;
+      if(item.decisao) delete state.decisoes[item.id];
+      else{
+        const activity = flowActivity(lic, item.id);
+        if(activity) resetFlowActivity(activity);
+      }
+    });
+  }else{
+    state.decisoes[gateId] = optionId;
+    (option.pula || []).forEach(id=>{
+      const activity = ensureFlowActivity(lic, def, flowNode(def, id));
+      if(activity.status === 'Done') return;
+      Object.assign(activity, {status: 'N/A', puladaPeloFluxo: true,
+        observacao: activity.observacao || `Não aplicável: ${node.decisao} ${option.rotulo}`});
+    });
+    if(option.etapa) ensureFlowActivity(lic, def, flowNode(def, option.etapa));
+  }
+  if(option.status) lic.status = option.status;
+  addFlowHistory(lic, `${node.decisao} ${option.rotulo}`);
+  syncFlowStatus(lic, gateId);
+}
+
+/* Novo ciclo de renovação: etapas voltam ao início; o histórico permanece. */
+function startFlowCycle(lic){
+  const flow = walkFlow(lic);
+  if(!flow) throw new Error('Esta licença ainda não segue um fluxo.');
+  const ids = new Set(flowOrder(flow.def));
+  const pathOnly = new Set([
+    ...flow.def.nos.filter(node=>node.condicional).map(node=>node.id),
+    ...Object.keys(flow.def.etapasFinais || {})
+  ]);
+  lic.activities = (lic.activities || []).filter(activity=>!pathOnly.has(activity.etapaPadraoId));
+  lic.activities.forEach(activity=>{
+    if(!ids.has(activity.etapaPadraoId)) return;
+    resetFlowActivity(activity);
+    activity.date = '';
+  });
+  Object.assign(lic.fluxo, {ciclo: (lic.fluxo.ciclo || 1) + 1, decisoes: {}, extras: []});
+  addFlowHistory(lic, `Ciclo ${lic.fluxo.ciclo} iniciado`);
+}
+
+/* ---------------------------------------------------------------
+   CALENDÁRIO DE VENCIMENTOS (ciclo mensal)
+--------------------------------------------------------------- */
+function addDaysIso(iso, days){
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0,10);
+}
+
+function renewalWindow(lic){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(lic.vencimento || '')) return null;
+  const custom = Number(lic.antecedenciaDias);
+  const def = PROCESS_FLOWS[lic.fluxo?.tipo || suggestedFlowType(lic)];
+  const lead = Number.isInteger(custom) && custom > 0 ? custom : (def?.antecedenciaDias || 120);
+  return {lead, abertura: addDaysIso(lic.vencimento, -lead), vencimento: lic.vencimento};
+}
+
+function monthBounds(month){
+  const [year, monthNumber] = month.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  return {start: `${month}-01`, end: `${month}-${String(lastDay).padStart(2,'0')}`};
+}
+
+function shiftMonth(month, delta){
+  const [year, monthNumber] = month.split('-').map(Number);
+  return new Date(Date.UTC(year, monthNumber - 1 + delta, 1)).toISOString().slice(0,7);
+}
+
+function calendarGroups(list, month){
+  const {start, end} = monthBounds(month);
+  const groups = {acao: [], vencidas: [], aguardar: [], semData: []};
+  list.forEach(lic=>{
+    const span = renewalWindow(lic);
+    if(!span) groups.semData.push({lic});
+    else if(span.vencimento < start) groups.vencidas.push({lic, span});
+    else if(span.abertura <= end) groups.acao.push({lic, span});
+    else groups.aguardar.push({lic, span});
+  });
+  const byDate = key=>(a, b)=>a.span[key].localeCompare(b.span[key]);
+  groups.acao.sort(byDate('vencimento'));
+  groups.vencidas.sort(byDate('vencimento'));
+  groups.aguardar.sort(byDate('abertura'));
+  return groups;
+}
+
 function setSaveState(color, text, message = ''){
   document.getElementById('saveDot').style.background = color;
   document.getElementById('saveText').textContent = text;
@@ -354,7 +604,9 @@ function statusBadgeClass(status){
   const s = (status||'').toLowerCase();
   if(s==='obtida') return 'b-obtida';
   if(s==='condicionada') return 'b-condicionada';
-  if(s==='dispensada') return 'b-dispensada';
+  if(s==='dispensada' || s==='não aplicável') return 'b-dispensada';
+  if(s==='em análise') return 'b-analise';
+  if(s==='indeferida') return 'b-indeferida';
   return 'b-pendente';
 }
 function riscoBadgeClass(r){
@@ -385,13 +637,13 @@ function actStatusClass(status){
 function renderKPIs(list){
   const total = list.length;
   const obtidas = list.filter(l=>l.status==='Obtida').length;
-  const pendentes = list.filter(l=>l.status==='Pendente'||l.status==='Condicionada').length;
+  const pendentes = list.filter(l=>OPEN_STATUSES.includes(l.status)).length;
   const vencidas = list.filter(l=>l.vencimento && daysUntil(l.vencimento)<0).length;
   const altoRisco = list.filter(l=>(l.risco||'').toLowerCase()==='alto').length;
   const kpis = [
     {n:total, l:'Licenças no escopo', cls:''},
     {n:obtidas, l:'Obtidas', cls:'accent-green'},
-    {n:pendentes, l:'Pendentes / condicionadas', cls:'accent-amber'},
+    {n:pendentes, l:'Pendentes / em andamento', cls:'accent-amber'},
     {n:vencidas, l:'Vencidas ou em atraso', cls:'accent-red'},
     {n:altoRisco, l:'Risco alto', cls:'accent-purple'},
   ];
@@ -443,19 +695,28 @@ function render(){
   const root = document.getElementById('licList');
   const unitPanel = document.getElementById('unitPanel');
   const gantt = document.getElementById('ganttView');
+  const calendar = document.getElementById('calendarPanel');
   const unitId = activePanel === 'unit' ? currentUnitId() : null;
   const unitDetail = Boolean(unitId);
   document.getElementById('dashboardFilters').hidden = unitDetail;
   document.getElementById('kpiRow').hidden = unitDetail;
   if(activePanel !== 'license' || activeView !== 'list') root.innerHTML = '';
   if(activePanel !== 'unit') unitPanel.innerHTML = '';
+  if(activePanel !== 'calendar') calendar.innerHTML = '';
   root.hidden = activePanel !== 'license' || activeView !== 'list';
   unitPanel.hidden = activePanel !== 'unit';
+  calendar.hidden = activePanel !== 'calendar';
   gantt.hidden = activePanel !== 'license' || activeView !== 'gantt';
+  document.getElementById('viewSwitch').hidden = activePanel !== 'license';
   document.getElementById('btnLicensePanel').classList.toggle('active', activePanel === 'license');
   document.getElementById('btnUnitPanel').classList.toggle('active', activePanel === 'unit');
+  document.getElementById('btnCalendarPanel').classList.toggle('active', activePanel === 'calendar');
   document.getElementById('btnListView').classList.toggle('active', activeView === 'list');
   document.getElementById('btnGanttView').classList.toggle('active', activeView === 'gantt');
+  if(activePanel === 'calendar'){
+    renderCalendar(list);
+    return;
+  }
   if(activePanel === 'unit'){
     if(unitId) renderUnitDetail(unitId);
     else renderUnitPanel(list);
@@ -484,11 +745,80 @@ function navigatePanel(hash){
 }
 
 function applyPanelRoute(){
-  activePanel = window.location.hash === '#licenses' ? 'license' : 'unit';
+  const hash = window.location.hash;
+  activePanel = hash === '#licenses' ? 'license' : hash === '#calendar' ? 'calendar' : 'unit';
   if(appReady) render();
 }
 
 window.addEventListener('hashchange', applyPanelRoute);
+
+function openLicense(id){
+  expandedIds.add(id);
+  activeView = 'list';
+  navigatePanel('#licenses');
+  const card = window.CSS ? document.querySelector(`.lic-card[data-id="${window.CSS.escape(id)}"]`) : null;
+  card?.scrollIntoView({block: 'start'});
+}
+
+let calendarMonth = todayStr().slice(0,7);
+
+function renderCalendar(list){
+  const root = document.getElementById('calendarPanel');
+  const groups = calendarGroups(list, calendarMonth);
+  const {start, end} = monthBounds(calendarMonth);
+  const label = new Intl.DateTimeFormat('pt-BR', {month: 'long', year: 'numeric', timeZone: 'UTC'})
+    .format(new Date(`${start}T00:00:00Z`));
+  const dueThisMonth = groups.acao.filter(({span})=>span.vencimento <= end).length;
+  const item = ({lic, span})=>{
+    const tags = [];
+    if(span){
+      tags.push(`<span class="badge b-condicionada">${span.abertura < start ? 'Janela aberta desde' : 'Janela abre em'} ${esc(fmtDate(span.abertura))}</span>`);
+      tags.push(`<span class="badge ${span.vencimento <= end ? 'b-venc-vencido' : 'b-venc-ok'}">Vence em ${esc(fmtDate(span.vencimento))}</span>`);
+    }
+    return `<li class="calendar-item">
+      <div class="calendar-info"><strong>${esc(lic.id)} · ${esc(lic.tipoLicenca || lic.categoria || '—')}</strong>
+        <p>${esc(lic.unidade)} · ${esc(lic.orgaoEmissor || '—')}</p>
+        <p class="calendar-flow">${esc(flowSummary(lic))}</p></div>
+      <div class="calendar-meta"><span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status || '—')}</span>${tags.join('')}
+        <button class="btn" data-open-license="${esc(lic.id)}">Abrir licença</button></div>
+    </li>`;
+  };
+  const itemList = entries=>`<ul class="calendar-list">${entries.map(item).join('')}</ul>`;
+  root.innerHTML = `<div class="calendar-head">
+      <button class="btn" data-month="-1" aria-label="Mês anterior">‹</button>
+      <h2>${esc(label)}</h2>
+      <button class="btn" data-month="1" aria-label="Próximo mês">›</button>
+      <button class="btn btn-ghost" data-month="0">Mês atual</button>
+    </div>
+    <p class="calendar-help">Ciclo mensal de acompanhamento: a janela de renovação abre alguns dias antes do vencimento (120 por padrão, ajustável em cada licença). Licenças com a janela aberta seguem o fluxo; as demais aguardam o próximo ciclo.</p>
+    <div class="unit-detail-summary">
+      <div class="kpi accent-amber"><div class="num">${groups.acao.length}</div><div class="lbl">Janela aberta no mês</div></div>
+      <div class="kpi accent-red"><div class="num">${dueThisMonth}</div><div class="lbl">Vencem no mês</div></div>
+      <div class="kpi accent-red"><div class="num">${groups.vencidas.length}</div><div class="lbl">Vencidas antes do mês</div></div>
+      <div class="kpi"><div class="num">${groups.aguardar.length}</div><div class="lbl">Aguardar próximo ciclo</div></div>
+    </div>
+    <section class="unit-detail-section"><h2>Ação neste ciclo (${groups.acao.length})</h2>
+      ${groups.acao.length ? itemList(groups.acao) : '<p>Nenhuma janela de renovação aberta neste mês.</p>'}
+    </section>
+    <section class="unit-detail-section"><h2>Vencidas (${groups.vencidas.length})</h2>
+      ${groups.vencidas.length ? itemList(groups.vencidas) : '<p>Nenhuma licença vencida antes deste mês.</p>'}
+    </section>
+    <section class="unit-detail-section"><details><summary><h2>Aguardar o próximo ciclo (${groups.aguardar.length})</h2></summary>
+      ${itemList(groups.aguardar)}</details>
+    </section>
+    <section class="unit-detail-section"><details><summary><h2>Sem data de vencimento (${groups.semData.length})</h2></summary>
+      <p class="calendar-help">Dispensas e licenças sem validade: revise se continuam aplicáveis.</p>
+      ${itemList(groups.semData)}</details>
+    </section>`;
+  root.querySelectorAll('[data-month]').forEach(button=>button.addEventListener('click', ()=>{
+    const delta = Number(button.dataset.month);
+    calendarMonth = delta ? shiftMonth(calendarMonth, delta) : todayStr().slice(0,7);
+    render();
+  }));
+  root.querySelectorAll('[data-open-license]').forEach(button=>button.addEventListener('click', ()=>{
+    openLicense(button.dataset.openLicense);
+  }));
+}
 
 function renderUnitDetail(id){
   const root = document.getElementById('unitPanel');
@@ -500,7 +830,7 @@ function renderUnitDetail(id){
     return;
   }
   const licenses = DATA.filter(lic=>lic.unidadeId === id);
-  const pending = licenses.filter(lic=>['Pendente','Condicionada'].includes(lic.status)).length;
+  const pending = licenses.filter(lic=>OPEN_STATUSES.includes(lic.status)).length;
   const expired = licenses.filter(lic=>lic.vencimento && daysUntil(lic.vencimento) < 0).length;
   const due = licenses.filter(lic=>lic.vencimento && daysUntil(lic.vencimento) >= 0 && daysUntil(lic.vencimento) <= 120).length;
   root.innerHTML = `<article class="unit-detail">
@@ -514,7 +844,7 @@ function renderUnitDetail(id){
     </header>
     <div class="unit-detail-summary">
       <div class="kpi"><div class="num">${licenses.length}</div><div class="lbl">Licenças</div></div>
-      <div class="kpi"><div class="num">${pending}</div><div class="lbl">Pendentes / condicionadas</div></div>
+      <div class="kpi"><div class="num">${pending}</div><div class="lbl">Pendentes / em andamento</div></div>
       <div class="kpi"><div class="num">${expired}</div><div class="lbl">Vencidas</div></div>
       <div class="kpi"><div class="num">${due}</div><div class="lbl">Vencem em até 120 dias</div></div>
     </div>
@@ -664,7 +994,7 @@ function renderCard(lic){
       <div class="lic-id">${esc(lic.id)}</div>
       <div class="lic-title">
         <div class="name">${esc(lic.tipoLicenca||lic.categoria||'—')} · ${esc(lic.unidade)}</div>
-        <div class="sub">${esc(lic.orgaoEmissor||'—')} · ${lic.cidade?esc(lic.cidade)+'/'+esc(lic.uf):''} · ${doneCount}/${lic.activities.length} atividades concluídas</div>
+        <div class="sub">${esc(lic.orgaoEmissor||'—')} · ${lic.cidade?esc(lic.cidade)+'/'+esc(lic.uf):''} · ${doneCount}/${lic.activities.length} atividades concluídas${lic.fluxo ? ` · ${esc(flowSummary(lic))}` : ''}</div>
       </div>
       <div class="badges">
         <span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status||'—')}</span>
@@ -676,6 +1006,7 @@ function renderCard(lic){
       ${renderFields(lic)}
         ${renderUnitProfile(lic)}
       ${renderEvidence('license', lic)}
+      ${renderFlow(lic)}
       ${renderActivities(lic)}
       ${lic.notes?`<div class="notes-box">📝 ${esc(lic.notes)}</div>`:''}
       <div class="card-footer">
@@ -703,9 +1034,10 @@ function renderFields(lic){
     <div class="field wide"><label>Categoria</label><input data-lic="${esc(lic.id)}" data-field="categoria" value="${esc(lic.categoria||'')}"></div>
     ${f('Órgão Emissor','orgaoEmissor')}
     ${f('Tipo de Licença','tipoLicenca')}
-    ${sel('Status','status',['Pendente','Condicionada','Obtida','Dispensada'])}
+    ${sel('Status','status',LICENSE_STATUSES)}
     ${f('Data de Emissão','dataEmissao','date')}
     ${f('Vencimento','vencimento','date')}
+    <div class="field"><label>Janela de renovação (dias)</label><input type="number" min="1" step="1" data-lic="${esc(lic.id)}" data-field="antecedenciaDias" value="${esc(lic.antecedenciaDias||'')}" placeholder="${esc(PROCESS_FLOWS[lic.fluxo?.tipo || suggestedFlowType(lic)]?.antecedenciaDias || 120)}" title="Dias antes do vencimento em que a renovação entra no ciclo mensal"></div>
     <div class="field full"><label>Notas</label><textarea data-lic="${esc(lic.id)}" data-field="notes">${esc(lic.notes||'')}</textarea></div>
   </div>`;
 }
@@ -733,7 +1065,7 @@ function renderActivities(lic){
       <td><input data-af="owner" value="${esc(a.owner||'')}" placeholder="responsável"></td>
       <td>
         <select data-af="status" class="act-status ${actStatusClass(a.status)}">
-          ${['Não iniciado','Working on it','Stuck','Done'].map(s=>`<option ${s===a.status?'selected':''}>${s}</option>`).join('')}
+          ${ACTIVITY_STATUSES.map(s=>`<option ${s===a.status?'selected':''}>${s}</option>`).join('')}
         </select>
       </td>
       <td><input type="date" data-af="date" value="${esc(a.date||'')}" class="${overdue?'act-overdue':''}"></td>
@@ -749,6 +1081,59 @@ function renderActivities(lic){
     <thead><tr><th style="width:24%">Atividade</th><th style="width:16%">Responsável</th><th style="width:16%">Status</th><th style="width:13%">Data</th><th style="width:25%">Observação</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+function renderFlow(lic){
+  const flow = walkFlow(lic);
+  if(!flow){
+    const suggested = suggestedFlowType(lic);
+    return `<section class="flow-section"><div class="section-label">Fluxo do processo</div>
+      <p class="flow-help">Esta licença ainda não segue o fluxograma. Aplicar o fluxo acrescenta as etapas e mantém as atividades atuais.</p>
+      <div class="flow-apply"><select data-flow-type aria-label="Fluxo do processo">
+        ${Object.entries(PROCESS_FLOWS).map(([key, def])=>`<option value="${esc(key)}" ${key===suggested?'selected':''}>${esc(def.nome)}</option>`).join('')}
+      </select><button class="btn btn-primary" data-flow-apply="${esc(lic.id)}">Aplicar fluxo</button></div>
+    </section>`;
+  }
+  const {def, items, current, fim} = flow;
+  const steps = items.map(({node, option, state})=>{
+    const label = node.decisao ? `${node.decisao}${option ? ` → ${option.rotulo}` : ''}` : node.nome;
+    return `<li class="flow-step flow-${state} ${node.decisao ? 'flow-gate' : ''}"><span>${esc(label)}</span>${node.area ? `<small>${esc(node.area)}</small>` : ''}</li>`;
+  }).join('');
+  let action;
+  if(fim){
+    action = `<div class="flow-current flow-finished"><div class="flow-kicker">Fluxo concluído</div><strong>${esc(fim)}</strong>
+      <p>Quando a próxima janela de renovação abrir, inicie um novo ciclo.</p>
+      <button class="btn" data-flow-cycle="${esc(lic.id)}">Iniciar novo ciclo</button></div>`;
+  }else if(current.node.decisao){
+    action = `<div class="flow-current"><div class="flow-kicker">Decisão</div><strong>${esc(current.node.decisao)}</strong>
+      <div class="unit-actions">${current.node.opcoes.map(option=>`<button class="btn" data-flow-decide="${esc(lic.id)}" data-gate="${esc(current.node.id)}" data-option="${esc(option.id)}">${esc(option.rotulo)}</button>`).join('')}</div></div>`;
+  }else{
+    action = `<div class="flow-current"><div class="flow-kicker">Etapa atual${current.node.area ? ` · ${esc(current.node.area)}` : ''}</div>
+      <strong>${esc(current.node.nome)}</strong>${current.node.nota ? `<p>${esc(current.node.nota)}</p>` : ''}
+      <button class="btn btn-primary" data-flow-complete="${esc(lic.id)}" data-step="${esc(current.node.id)}">Concluir etapa</button></div>`;
+  }
+  const history = [...(lic.fluxo.historico || [])].reverse();
+  return `<section class="flow-section"><div class="section-label">Fluxo · ${esc(def.nome)} · ciclo ${esc(lic.fluxo.ciclo || 1)}</div>
+    ${action}
+    <ol class="flow-steps">${steps}</ol>
+    ${history.length ? `<details class="standard-flow"><summary>Histórico do fluxo (${history.length})</summary><ul>${history.map(entry=>`<li>${esc(fmtDate(entry.data))} · ciclo ${esc(entry.ciclo)} · ${esc(entry.texto)}</li>`).join('')}</ul></details>` : ''}
+  </section>`;
+}
+
+async function runFlowAction(id, action, message){
+  const lic = DATA.find(item=>item.id === id);
+  try{
+    if(!lic) throw new Error('A licença não está mais disponível. Carregue o servidor.');
+    action(lic);
+  }catch(error){
+    showToast(error.message);
+    return false;
+  }
+  const saving = saveData();
+  render();
+  const saved = await saving;
+  showToast(saved ? message : `${message} localmente; sincronização pendente`);
+  return saved;
 }
 
 function esc(s){
@@ -892,7 +1277,13 @@ function attachCardEvents(){
     const idx = +tr.dataset.idx;
     tr.querySelectorAll('[data-af]').forEach(el=>{
       el.addEventListener('change', ()=>{
-        lic.activities[idx][el.dataset.af] = el.value;
+        const before = currentFlowNodeId(lic);
+        const activity = lic.activities[idx];
+        activity[el.dataset.af] = el.value;
+        if(el.dataset.af === 'status'){
+          activity.dataRealizada = STEP_DONE.includes(el.value) ? (activity.dataRealizada || todayStr()) : '';
+          syncFlowStatus(lic, before);
+        }
         saveData();
         render();
       });
@@ -916,6 +1307,21 @@ function attachCardEvents(){
     });
   });
 
+  document.querySelectorAll('[data-flow-apply]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const type = btn.parentElement.querySelector('[data-flow-type]').value;
+    void runFlowAction(btn.dataset.flowApply, lic=>applyFlow(lic, type), 'Fluxo aplicado');
+  }));
+  document.querySelectorAll('[data-flow-complete]').forEach(btn=>btn.addEventListener('click', ()=>{
+    void runFlowAction(btn.dataset.flowComplete, lic=>completeFlowStep(lic, btn.dataset.step), 'Etapa concluída');
+  }));
+  document.querySelectorAll('[data-flow-decide]').forEach(btn=>btn.addEventListener('click', ()=>{
+    void runFlowAction(btn.dataset.flowDecide, lic=>decideFlow(lic, btn.dataset.gate, btn.dataset.option), 'Decisão registrada');
+  }));
+  document.querySelectorAll('[data-flow-cycle]').forEach(btn=>btn.addEventListener('click', ()=>{
+    if(!confirm('Iniciar um novo ciclo de renovação? As etapas do fluxo voltam para "Não iniciado"; o histórico é mantido.')) return;
+    void runFlowAction(btn.dataset.flowCycle, startFlowCycle, 'Novo ciclo iniciado');
+  }));
+
   document.querySelectorAll('[data-del-lic]').forEach(btn=>{
     btn.addEventListener('click', async e=>{
       e.stopPropagation();
@@ -934,6 +1340,7 @@ document.getElementById('fRisco').addEventListener('change', render);
 document.getElementById('fBusca').addEventListener('input', render);
 document.getElementById('btnLicensePanel').addEventListener('click', ()=>navigatePanel('#licenses'));
 document.getElementById('btnUnitPanel').addEventListener('click', ()=>navigatePanel('#units'));
+document.getElementById('btnCalendarPanel').addEventListener('click', ()=>navigatePanel('#calendar'));
 document.getElementById('btnListView').addEventListener('click', ()=>{ activeView='list'; render(); });
 document.getElementById('btnGanttView').addEventListener('click', ()=>{ activeView='gantt'; render(); });
 document.getElementById('btnClearFilters').addEventListener('click', ()=>{
@@ -1071,10 +1478,20 @@ function openNewLicense(unitId = ''){
     .map(unit=>`<option value="${esc(unit.id)}">${esc(unit.nome)} — ${esc(unit.cidade)}/${esc(unit.uf)}</option>`).join('');
   select.value = unitId;
   fillNewLicenseUnit();
+  suggestNewLicenseFlow();
   openModal('overlayNewLic');
 }
 
+function suggestNewLicenseFlow(){
+  document.getElementById('nl_fluxo').value = suggestedFlowType({
+    categoria: document.getElementById('nl_categoria').value,
+    tipoLicenca: document.getElementById('nl_tipo').value
+  });
+}
+
 document.getElementById('nl_unidade').addEventListener('change', fillNewLicenseUnit);
+document.getElementById('nl_categoria').addEventListener('change', suggestNewLicenseFlow);
+document.getElementById('nl_tipo').addEventListener('change', suggestNewLicenseFlow);
 document.getElementById('btnNewLic').addEventListener('click', ()=>openNewLicense());
 document.getElementById('btnSaveNewLic').addEventListener('click', async ()=>{
   const id = document.getElementById('nl_id').value.trim();
@@ -1104,6 +1521,8 @@ document.getElementById('btnSaveNewLic').addEventListener('click', async ()=>{
     lastUpdated: 'Criado manualmente em ' + fmtDate(todayStr()),
     activities: []
   };
+  const flowType = document.getElementById('nl_fluxo').value;
+  if(flowType) applyFlow(lic, flowType);
   DATA.push(lic);
   const saving = saveData();
   closeModal('overlayNewLic');
@@ -1182,7 +1601,7 @@ function buildAndPrintReport(){
   const list = DATA;
   const total = list.length;
   const obtidas = list.filter(l=>l.status==='Obtida').length;
-  const pendentes = list.filter(l=>l.status==='Pendente'||l.status==='Condicionada').length;
+  const pendentes = list.filter(l=>OPEN_STATUSES.includes(l.status)).length;
   const vencidas = list.filter(l=>l.vencimento && daysUntil(l.vencimento)<0);
   const alerta = list.filter(l=>l.vencimento && daysUntil(l.vencimento)>=0 && daysUntil(l.vencimento)<=120);
   const altoRisco = list.filter(l=>(l.risco||'').toLowerCase()==='alto').length;
@@ -1219,6 +1638,7 @@ function buildAndPrintReport(){
         <div><b>Vencimento</b><span>${lic.vencimento ? fmtDate(lic.vencimento) : 'Não informado'}</span></div>
         <div><b>Responsável</b><span>${value(lic.owner)}</span></div>
         <div><b>Última atualização</b><span>${value(lic.lastUpdated)}</span></div>
+        <div class="rep-detail-wide"><b>Fluxo do processo</b><span>${value(lic.fluxo ? `${PROCESS_FLOWS[lic.fluxo.tipo]?.nome || ''} · ciclo ${lic.fluxo.ciclo || 1} · ${flowSummary(lic)}` : '')}</span></div>
         <div class="rep-detail-wide"><b>Notas</b><span class="rep-notes">${value(lic.notes)}</span></div>
       </div>
       <div class="rep-subtitle">Atividades / etapas (${(lic.activities||[]).length})</div>
@@ -1243,7 +1663,7 @@ function buildAndPrintReport(){
     <div class="rep-kpis">
       <div class="rep-kpi"><b>${total}</b>Licenças no escopo</div>
       <div class="rep-kpi"><b>${obtidas}</b>Obtidas</div>
-      <div class="rep-kpi"><b>${pendentes}</b>Pendentes / condicionadas</div>
+      <div class="rep-kpi"><b>${pendentes}</b>Pendentes / em andamento</div>
       <div class="rep-kpi"><b>${vencidas.length}</b>Vencidas</div>
       <div class="rep-kpi"><b>${alerta.length}</b>Vencimento em até 120 dias</div>
       <div class="rep-kpi"><b>${altoRisco}</b>Risco alto</div>

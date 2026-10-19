@@ -56,7 +56,7 @@ function createService({state = {model: emptyModel(), revision: 2}, tables = {},
   return {service: window.LicenseDataService, state, calls};
 }
 
-function createApp({remote = true, service = {}, storage = new Map(), withCatalog = false} = {}){
+function createApp({remote = true, service = {}, storage = new Map(), withCatalog = false, withFlows = false} = {}){
   const elements = new Map();
   const errors = [];
   const element = id=>{
@@ -91,6 +91,7 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
     setTimeout: ()=>0, clearTimeout(){}, setInterval(){}, confirm: ()=>true
   });
   if(withCatalog) vm.runInContext(readFileSync(join(root, 'data', 'fluxo.js'), 'utf8'), context);
+  if(withFlows) vm.runInContext(readFileSync(join(root, 'data', 'fluxos-processo.js'), 'utf8'), context);
   vm.runInContext(appSource, context);
   const run = code=>vm.runInContext(code, context);
   run("render = ()=>{}; authenticatedUserId = 'user-1';");
@@ -732,4 +733,175 @@ test('exclusao concorrente nao sobrescreve licenca adicionada no servidor', asyn
   assert.equal(app.run('conflict'), true);
   assert.equal(app.run('pendingChanges'), true);
   assert.match(app.element('syncMessage').textContent, /Outra pessoa/);
+});
+
+const flowLicense = (extra = {})=>JSON.stringify({...license('L-F'), ...extra});
+const flowSteps = app=>({
+  done: id=>app.run(`completeFlowStep(lic, '${id}')`),
+  decide: (gate, option)=>app.run(`decideFlow(lic, '${gate}', '${option}')`),
+  current: ()=>app.run('currentFlowNodeId(lic)'),
+  status: id=>app.run(`flowActivity(lic, '${id}')?.status`)
+});
+
+test('aplicar fluxo acrescenta as etapas com a area responsavel e mantem as atividades atuais', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense({activities: [{name: 'Atividade antiga', status: 'Done'}]})};
+    applyFlow(lic, 'licenca');`);
+  assert.equal(app.run('lic.activities.length'), 11);
+  assert.equal(app.run('lic.activities[0].owner'), 'Sustentabilidade (Analista)');
+  assert.equal(app.run("flowActivity(lic, 'LIC-05').owner"), 'Áreas internas (Facilities, Jurídico, Fábrica)');
+  assert.equal(app.run("flowActivity(lic, 'LIC-08').owner"), 'Fiscal / Financeiro');
+  assert.equal(app.run('lic.activities[10].name'), 'Atividade antiga');
+  assert.equal(app.run("flowActivity(lic, 'LIC-P')"), undefined);
+  assert.throws(()=>app.run("applyFlow(lic, 'outorga')"), /já segue um fluxo/);
+});
+
+test('fluxo de licencas trata pendencia sem repetir o pagamento e conclui com a licenca emitida', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense()}; applyFlow(lic, 'licenca');`);
+  const flow = flowSteps(app);
+  flow.done('LIC-01'); flow.decide('LIC-G1', 'sim'); flow.done('LIC-02'); flow.decide('LIC-G2', 'exigida');
+  assert.equal(app.run('lic.status'), 'Pendente');
+  ['LIC-03','LIC-04','LIC-05','LIC-06','LIC-07','LIC-08'].forEach(flow.done);
+  assert.equal(flow.current(), 'LIC-09');
+  assert.equal(app.run('lic.status'), 'Em análise');
+  flow.done('LIC-09'); flow.decide('LIC-G3', 'pendencia');
+  assert.equal(app.run('lic.status'), 'Pendente');
+  assert.equal(flow.current(), 'LIC-P');
+  assert.equal(flow.status('LIC-06'), 'Não iniciado');
+  assert.equal(flow.status('LIC-08'), 'Done');
+  flow.done('LIC-P'); flow.done('LIC-06');
+  assert.equal(flow.current(), 'LIC-09');
+  assert.equal(app.run('lic.status'), 'Em análise');
+  flow.done('LIC-09'); flow.decide('LIC-G3', 'emitida');
+  assert.equal(app.run('lic.status'), 'Obtida');
+  flow.done('LIC-10');
+  assert.equal(app.run('walkFlow(lic).fim'), 'Licença emitida dentro do prazo');
+  assert.equal(app.run('flowSummary(lic)'), 'Concluído: Licença emitida dentro do prazo');
+  app.run('startFlowCycle(lic)');
+  assert.equal(app.run('lic.fluxo.ciclo'), 2);
+  assert.equal(flow.current(), 'LIC-01');
+  assert.equal(app.run("flowActivity(lic, 'LIC-P')"), undefined);
+  assert.equal(app.run('lic.status'), 'Obtida');
+  assert.ok(app.run('lic.fluxo.historico.length') >= 6);
+});
+
+test('indeferimento reinicia o processo a partir da consultoria e descarta a pendencia aberta', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense()}; applyFlow(lic, 'licenca');`);
+  const flow = flowSteps(app);
+  flow.done('LIC-01'); flow.decide('LIC-G1', 'sim'); flow.done('LIC-02'); flow.decide('LIC-G2', 'exigida');
+  ['LIC-03','LIC-04','LIC-05','LIC-06','LIC-07','LIC-08','LIC-09'].forEach(flow.done);
+  flow.decide('LIC-G3', 'pendencia');
+  flow.done('LIC-P'); flow.done('LIC-06'); flow.done('LIC-09');
+  flow.decide('LIC-G3', 'indeferida');
+  assert.equal(app.run('lic.status'), 'Indeferida');
+  assert.equal(flow.current(), 'LIC-I');
+  assert.equal(flow.status('LIC-08'), 'Não iniciado');
+  assert.equal(app.run("lic.fluxo.extras.includes('LIC-P')"), false);
+  flow.done('LIC-I');
+  assert.equal(flow.current(), 'LIC-03');
+});
+
+test('dispensa e jurisdicao fora do Brasil encerram o fluxo pelo caminho do fluxograma', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense()}; applyFlow(lic, 'licenca');`);
+  const flow = flowSteps(app);
+  flow.done('LIC-01'); flow.decide('LIC-G1', 'sim'); flow.done('LIC-02'); flow.decide('LIC-G2', 'dispensa');
+  assert.equal(app.run('lic.status'), 'Dispensada');
+  assert.equal(flow.current(), 'LIC-D');
+  flow.done('LIC-D');
+  assert.equal(app.run('walkFlow(lic).fim'), 'Dispensa de licença');
+  app.run(`lic = ${flowLicense()}; applyFlow(lic, 'licenca');`);
+  flow.done('LIC-01'); flow.decide('LIC-G1', 'nao');
+  assert.equal(app.run('lic.status'), 'Não aplicável');
+  assert.equal(app.run('walkFlow(lic).fim'), 'Licenciamento não aplicável à jurisdição');
+});
+
+test('outorga sem taxa marca o pagamento como nao aplicavel e mantem a decisao na pendencia', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense({categoria: 'Outorga de Água'})}; applyFlow(lic, suggestedFlowType(lic));`);
+  assert.equal(app.run('lic.fluxo.tipo'), 'outorga');
+  assert.equal(app.run("flowActivity(lic, 'OUT-05').owner"), 'Fábrica / Facilities');
+  const flow = flowSteps(app);
+  flow.done('OUT-01'); flow.decide('OUT-G1', 'sim');
+  ['OUT-02','OUT-03','OUT-04','OUT-05','OUT-06'].forEach(flow.done);
+  flow.decide('OUT-G2', 'nao');
+  assert.equal(flow.status('OUT-07'), 'N/A');
+  assert.equal(flow.current(), 'OUT-08');
+  assert.equal(app.run('lic.status'), 'Em análise');
+  flow.done('OUT-08'); flow.decide('OUT-G3', 'pendencia');
+  assert.equal(flow.current(), 'OUT-P');
+  flow.done('OUT-P'); flow.done('OUT-06');
+  assert.equal(flow.current(), 'OUT-08');
+  assert.equal(flow.status('OUT-07'), 'N/A');
+  flow.done('OUT-08'); flow.decide('OUT-G3', 'dispensa');
+  assert.equal(app.run('lic.status'), 'Dispensada');
+  assert.equal(flow.current(), 'OUT-09');
+});
+
+test('etapas e decisoes fora de ordem sao recusadas sem alterar a licenca', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense()}; applyFlow(lic, 'licenca'); var before = JSON.stringify(lic);`);
+  assert.throws(()=>app.run("decideFlow(lic, 'LIC-G3', 'emitida')"), /não está mais pendente/);
+  assert.throws(()=>app.run("completeFlowStep(lic, 'LIC-05')"), /não é mais a etapa atual/);
+  assert.throws(()=>app.run("applyFlow({id:'X', activities:[]}, 'inexistente')"), /fluxo válido/);
+  assert.equal(app.run('JSON.stringify(lic) === before'), true);
+});
+
+test('fluxo e etapas persistem na base central e voltam ao carregar', async ()=>{
+  let stored;
+  const app = createApp({withFlows: true, service: {save: async model=>{ stored = structuredClone(model); return 3; }}});
+  await app.run('loadData()');
+  app.run("DATA = [window.DEFAULT_DATA[0]]; applyFlow(DATA[0], 'outorga'); completeFlowStep(DATA[0], 'OUT-01');");
+  assert.equal(await app.run('saveData()'), true);
+  assert.equal(stored.processes[0].fluxo.tipo, 'outorga');
+  const next = createApp({withFlows: true, service: {
+    load: async ()=>({model: structuredClone(stored), revision: 3, organizationId: 'org-1'})
+  }});
+  await next.run('loadData()');
+  assert.equal(next.run('currentFlowNodeId(DATA[0])'), 'OUT-G1');
+  assert.equal(next.run("flowActivity(DATA[0], 'OUT-01').dataRealizada.length"), 10);
+});
+
+test('calendario separa janelas abertas, vencidas, proximos ciclos e licencas sem vencimento', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var groups = calendarGroups([
+    {id: 'A', vencimento: '2026-12-15'},
+    {id: 'B', vencimento: '2027-06-01'},
+    {id: 'C', vencimento: '2027-06-01', antecedenciaDias: '250'},
+    {id: 'D', vencimento: '2026-09-30'},
+    {id: 'E', vencimento: ''}
+  ], '2026-10');
+  var ids = key=>groups[key].map(item=>item.lic.id).join(',');`);
+  assert.equal(app.run("ids('acao')"), 'A,C');
+  assert.equal(app.run("ids('aguardar')"), 'B');
+  assert.equal(app.run("ids('vencidas')"), 'D');
+  assert.equal(app.run("ids('semData')"), 'E');
+  assert.equal(app.run('groups.acao[0].span.abertura'), '2026-08-17');
+  assert.equal(app.run("renewalWindow({vencimento: '2026-12-15', antecedenciaDias: 'abc'}).lead"), 120);
+  assert.equal(app.run("monthBounds('2026-02').end"), '2026-02-28');
+  assert.equal(app.run("shiftMonth('2026-12', 1)"), '2027-01');
+  assert.equal(app.run("shiftMonth('2026-01', -1)"), '2025-12');
+});
+
+test('calendario e fluxo renderizam conteudo escapado e as acoes do fluxograma', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`calendarMonth = '2026-10';
+    renderCalendar([{id: '<b>X</b>', unidade: 'U', status: 'Pendente', vencimento: '2026-12-15'}]);`);
+  const html = app.element('calendarPanel').innerHTML;
+  assert.match(html, /&lt;b&gt;X&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>X<\/b>/);
+  assert.match(html, /Abrir licença/);
+  assert.match(html, /Fluxo não aplicado/);
+  assert.match(html, /outubro de 2026/);
+  const pending = app.run(`renderFlow(${flowLicense({categoria: 'Outorga de Água'})})`);
+  assert.match(pending, /Aplicar fluxo/);
+  assert.match(pending, /value="outorga" selected/);
+  const applied = app.run(`var lic = ${flowLicense()}; applyFlow(lic, 'licenca'); renderFlow(lic)`);
+  assert.match(applied, /Concluir etapa/);
+  assert.match(applied, /Consultar o calendário de vencimentos/);
+  assert.match(applied, /Histórico do fluxo/);
+  app.run("completeFlowStep(lic, 'LIC-01')");
+  assert.match(app.run('renderFlow(lic)'), /data-option="nao"/);
 });

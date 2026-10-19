@@ -2,6 +2,16 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.11.0] - 2026-10-19
+
+### Fluxograma de Licenças e Outorgas
+
+- Fluxos guiados "Regulatório Licenças" e "Regulatório Outorgas", com etapas por área responsável e decisões do fluxograma (jurisdição, dispensa, taxa, resultado do órgão).
+- Pendência volta ao envio sem repetir o pagamento; indeferimento reinicia o processo pela etapa de consultoria ou de alternativas de abastecimento.
+- Botão "Aplicar fluxo" nas licenças existentes, preservando as atividades atuais; histórico de decisões e novo ciclo de renovação.
+- Novos status: Em análise, Indeferida e Não aplicável; status de atividade N/A.
+- Aba Calendário com o ciclo mensal de vencimentos e janela de renovação configurável por licença.
+
 ## [1.10.0] - 2026-10-15
 
 ### Exclusão de unidades
