@@ -4,7 +4,7 @@ const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 const PROCESS_FLOWS = window.PROCESS_FLOWS || {};
 
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.11.1';
 const LICENSE_STATUSES = ['Pendente','Em análise','Condicionada','Obtida','Dispensada','Indeferida','Não aplicável'];
 const OPEN_STATUSES = ['Pendente','Em análise','Condicionada','Indeferida'];
 const ACTIVITY_STATUSES = ['Não iniciado','Working on it','Stuck','Done','N/A'];
@@ -189,7 +189,7 @@ function modelFromLegacyData(records){
 
 function applyReferenceData(model){
   const references = SPREADSHEET_REFERENCE?.unitProfiles || {};
-  const flow = SPREADSHEET_REFERENCE?.flowTemplate || [];
+  const unitFlows = SPREADSHEET_REFERENCE?.unitFlows || {};
   const normalizeKey = value=>String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   if(!model.unitCatalogVersion){
     model.units = model.units || [];
@@ -202,27 +202,32 @@ function applyReferenceData(model){
     });
     model.unitCatalogVersion = 1;
   }
-  const referenceFor = unit=>{
-    const direct = references[unit.nome] || references[unit.codigo];
+  const lookup = (table, unit)=>{
+    const direct = table[unit.nome] || table[unit.codigo];
     if(direct) return direct;
     const key = normalizeKey(unit.nome || unit.codigo);
-    const match = Object.entries(references).find(([name])=>normalizeKey(name)===key);
-    return match ? match[1] : {};
+    const match = Object.entries(table).find(([name])=>normalizeKey(name)===key);
+    return match ? match[1] : null;
   };
+  const buildFlow = spec=>(spec?.etapas || []).map((step, index)=>({
+    id: `UF-${String(index+1).padStart(2,'0')}`, ordem: index + 1, ...step, obrigatoria: true
+  }));
+  /* Versões anteriores copiavam o fluxo transversal (IDs FT-) para todas as unidades. */
+  const isTransversalCopy = flow=>Array.isArray(flow) && flow.every(step=>/^FT-\d+$/.test(step?.id || ''));
+  const migrateFlows = model.unitFlowVersion !== 1;
   model.units = (model.units || []).map(unit=>{
-    const reference = referenceFor(unit);
+    const reference = lookup(references, unit) || {};
+    const replaceFlow = !Array.isArray(unit.standardFlow) || (migrateFlows && isTransversalCopy(unit.standardFlow));
+    const spec = replaceFlow ? lookup(unitFlows, unit) : null;
     return {
       ...unit,
       profile: {...reference, ...(unit.profile || {})},
       environmentalLicenses: unit.environmentalLicenses || SPREADSHEET_LICENSES[unit.nome] || SPREADSHEET_LICENSES[unit.codigo] || [],
-      standardFlow: unit.standardFlow || flow.map((name, index)=>({
-        id: `FT-${String(index+1).padStart(2,'0')}`,
-        ordem: index + 1,
-        nome: name,
-        obrigatoria: true
-      }))
+      standardFlow: replaceFlow ? buildFlow(spec) : unit.standardFlow,
+      standardFlowTitle: replaceFlow ? (spec?.titulo || '') : (unit.standardFlowTitle || '')
     };
   });
+  model.unitFlowVersion = 1;
   return model;
 }
 
@@ -857,9 +862,7 @@ function renderUnitDetail(id){
         <p>${esc(item.orgao)} · ${esc(item.numero || 'Sem número')}</p>
         <p>${esc(item.motivacao || '')}</p><p>${esc(item.risco || '')}</p></div>`).join('') || '<p>Nenhuma obrigação cadastrada.</p>'}
     </section>
-    <section class="unit-detail-section"><h2>Fluxo padrão</h2>
-      ${(unit.standardFlow || []).length ? `<ol>${unit.standardFlow.map(step=>`<li>${esc(step.nome)}</li>`).join('')}</ol>` : '<p>Nenhuma etapa padrão cadastrada.</p>'}
-    </section>
+    <section class="unit-detail-section">${renderUnitFlow(unit)}</section>
     <section class="unit-detail-section"><h2>Licenças da unidade</h2>
       ${licenses.map(lic=>renderCard(lic)).join('') || '<p>Nenhuma licença cadastrada. Use + Nova licença para adicionar a primeira.</p>'}
     </section>
@@ -867,6 +870,36 @@ function renderUnitDetail(id){
   attachUnitPanelEvents();
   attachCardEvents();
   attachEvidenceEvents(root);
+}
+
+function unitFlowStatusClass(status){
+  const s = (status || '').toLowerCase();
+  if(s === 'concluído') return 'b-obtida';
+  if(s === 'em andamento') return 'b-analise';
+  if(s === 'crítico') return 'b-indeferida';
+  return 'b-pendente';
+}
+
+function renderUnitFlow(unit){
+  const flow = unit.standardFlow || [];
+  const title = `Fluxo da unidade${unit.standardFlowTitle ? ` · ${esc(unit.standardFlowTitle)}` : ''}`;
+  if(!flow.length){
+    const reference = SPREADSHEET_REFERENCE?.flowTemplate || [];
+    return `<h2>${title}</h2><p>A planilha não tem um controle de etapas específico para esta unidade.</p>
+      ${reference.length ? `<details class="standard-flow"><summary>Fluxo transversal de referência (${reference.length} etapas)</summary><ol>${reference.map(name=>`<li>${esc(name)}</li>`).join('')}</ol></details>` : ''}`;
+  }
+  if(!flow.some(step=>step.responsavel || step.status)){
+    return `<h2>${title}</h2><ol>${flow.map(step=>`<li>${esc(step.nome)}</li>`).join('')}</ol>`;
+  }
+  const deadline = value=>/^\d{4}-\d{2}-\d{2}$/.test(value || '') ? fmtDate(value) : (value || '—');
+  return `<h2>${title}</h2>
+    <table class="act-table unit-flow-table">
+      <thead><tr><th>Etapa</th><th>Documento / ação</th><th>Responsável</th><th>Status</th><th>Prazo</th><th>Observação</th></tr></thead>
+      <tbody>${flow.map(step=>`<tr><td>${esc(step.etapa)}</td><td>${esc(step.nome)}</td><td>${esc(step.responsavel)}</td>
+        <td><span class="badge ${unitFlowStatusClass(step.status)}">${esc(step.status || '—')}</span></td>
+        <td>${esc(deadline(step.prazo))}</td><td>${esc(step.observacao)}</td></tr>`).join('')}</tbody>
+    </table>
+    <p class="flow-help">Situação registrada na planilha "Controle de etapas - Fluxo" (aba da unidade).</p>`;
 }
 
 function renderUnitPanel(list){
@@ -1053,7 +1086,7 @@ function renderUnitProfile(lic){
       ${fields.map(([label, key])=>`<div class="field ${['endereco','atividadeAmbiental','atividadesConduzidas'].includes(key)?'wide':''}"><label>${label}</label><div class="profile-value">${esc(profile[key])}</div></div>`).join('')}
     </div>
     ${licenses.length?`<details class="standard-flow"><summary>Obrigações ambientais (${licenses.length})</summary><ul>${licenses.map(item=>`<li><strong>${esc(item.tipo)}</strong> · ${esc(item.orgao)} · ${esc(item.numero || 'sem número')} · ${esc(item.risco)}</li>`).join('')}</ul></details>`:''}
-    ${flow.length?`<details class="standard-flow"><summary>Fluxo padrão da unidade (${flow.length} etapas)</summary><ol>${flow.map(step=>`<li>${esc(step.nome)}</li>`).join('')}</ol></details>`:''}`;
+    ${flow.length?`<details class="standard-flow"><summary>Fluxo da unidade (${flow.length} etapas)</summary><ol>${flow.map(step=>`<li>${esc(step.nome)}${step.status ? ` — ${esc(step.status)}` : ''}</li>`).join('')}</ol></details>`:''}`;
 }
 
 function renderActivities(lic){

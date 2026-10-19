@@ -2,6 +2,14 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.11.1] - 2026-10-19
+
+### Correção
+
+- Cada unidade passa a exibir o controle de etapas da sua própria aba da planilha, em vez do fluxo transversal copiado para todas.
+- Tabela com etapa, ação, responsável (por área), status, prazo e observação na página da unidade.
+- Unidades sem tabela própria mostram o fluxo transversal apenas como referência; a cópia antiga é substituída uma única vez.
+
 ## [1.11.0] - 2026-10-19
 
 ### Fluxograma de Licenças e Outorgas

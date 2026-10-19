@@ -7,7 +7,7 @@ Painel web para acompanhamento de licencas regulatorias.
 - `Controle_Licencas_Solinftec.html`: tela principal e estrutura da pagina.
 - `css/styles.css`: estilos, responsividade e regras de impressao.
 - `data/licencas.js`: registros padrao usados na inicializacao e na migracao do modelo estruturado.
-- `data/fluxo.js`: fluxo transversal e perfis das unidades extraidos de `Controle de etapas - Fluxo.xlsx`.
+- `data/fluxo.js`: perfis, fluxo transversal e controle de etapas de cada unidade extraidos de `Controle de etapas - Fluxo.xlsx` (responsaveis indicados por area).
 - `data/fluxos-processo.js`: fluxogramas de Licencas e de Outorgas (Sustentabilidade, v1.0), com etapas, areas responsaveis e decisoes.
 - `data/licencas_planilha.js`: obrigacoes ambientais da tabela 3 por unidade.
 - `data/supabase-config.js`: URL e chave publica opcionais do Supabase.
@@ -28,7 +28,11 @@ Painel web para acompanhamento de licencas regulatorias.
 
 O painel organiza os dados em unidades, tipos de processo, processos e etapas. A lista exibida e uma projecao compativel desse modelo estruturado.
 
-Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e dados de seguranca/AVCB. O fluxo transversal da planilha e aplicado como conjunto de etapas padrao para cada unidade.
+Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e dados de seguranca/AVCB.
+
+**Fluxo da unidade:** cada unidade exibe o controle de etapas da sua propria aba da planilha, com etapa, documento/acao, responsavel, status, prazo e observacao. As abas com tabela de etapas sao Fabrica, Balsas, LEM, Sinop e Querencia. Concordia, NY Tower e NetZero Farm nao tem tabela e mostram o fluxo transversal apenas como referencia. Os responsaveis aparecem por area (Sustentabilidade, Consultoria, Fabrica, Financeiro, Facilities, Juridico), sem nomes de pessoas.
+
+Versoes anteriores copiavam o fluxo transversal para todas as unidades. Essa copia e substituida automaticamente uma unica vez; fluxos diferentes dela sao preservados.
 
 Use o seletor **Por licença** para acompanhar cada processo individualmente ou **Por unidade** para consultar o perfil do local, suas obrigações e todos os processos relacionados.
 

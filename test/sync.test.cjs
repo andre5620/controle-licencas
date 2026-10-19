@@ -905,3 +905,57 @@ test('calendario e fluxo renderizam conteudo escapado e as acoes do fluxograma',
   app.run("completeFlowStep(lic, 'LIC-01')");
   assert.match(app.run('renderFlow(lic)'), /data-option="nao"/);
 });
+
+test('cada unidade recebe o controle de etapas da propria aba da planilha', async ()=>{
+  const app = createApp({withCatalog: true});
+  await app.run('loadData()');
+  const flow = name=>`MODEL.units.find(u=>u.nome === '${name}')`;
+  const sizes = {'Fábrica': 21, 'Balsas': 20, 'LEM': 15, 'Sinop': 15, 'Querência': 14,
+    'Concórdia': 0, 'NY Tower': 0, 'NetZero Farm': 0};
+  for(const [name, size] of Object.entries(sizes)){
+    assert.equal(app.run(`${flow(name)}.standardFlow.length`), size, name);
+  }
+  assert.equal(app.run(`${flow('Fábrica')}.standardFlowTitle`), 'Processo de emissão da LO');
+  assert.equal(app.run(`${flow('Fábrica')}.standardFlow[12].nome`), 'Matriz LAIA');
+  assert.equal(app.run(`${flow('Balsas')}.standardFlow[10].status`), 'Crítico');
+  assert.equal(app.run(`${flow('Sinop')}.standardFlow[0].nome`), 'Verificar enquadramento no sistema integrado MT');
+  assert.notEqual(app.run(`${flow('Balsas')}.standardFlow[0].nome`), app.run(`${flow('Fábrica')}.standardFlow[0].nome`));
+  assert.equal(app.run('MODEL.unitFlowVersion'), 1);
+});
+
+test('copia antiga do fluxo transversal e substituida uma vez, preservando fluxos personalizados', ()=>{
+  const app = createApp({withCatalog: true});
+  const transversal = JSON.stringify([{id: 'FT-01', ordem: 1, nome: 'Estatuto', obrigatoria: true}]);
+  app.run(`var migrated = applyReferenceData({version: 2, unitCatalogVersion: 1, processTypes: [], processes: [], units: [
+    {id: 'U1', nome: 'Balsas', standardFlow: ${transversal}},
+    {id: 'U2', nome: 'NY Tower', standardFlow: ${transversal}},
+    {id: 'U3', nome: 'Sinop', standardFlow: [{id: 'X', nome: 'Etapa personalizada'}]}
+  ]});`);
+  assert.equal(app.run('migrated.units[0].standardFlow.length'), 20);
+  assert.equal(app.run('migrated.units[0].standardFlow[0].id'), 'UF-01');
+  assert.equal(app.run('migrated.units[1].standardFlow.length'), 0);
+  assert.equal(app.run('migrated.units[2].standardFlow[0].nome'), 'Etapa personalizada');
+  app.run("migrated.units[0].standardFlow = []; migrated = applyReferenceData(migrated);");
+  assert.equal(app.run('migrated.units[0].standardFlow.length'), 0);
+});
+
+test('pagina da unidade mostra a tabela de etapas ou o fluxo transversal como referencia', async ()=>{
+  const app = createApp({withCatalog: true});
+  await app.run('loadData()');
+  app.run("renderUnitDetail(MODEL.units.find(u=>u.nome === 'Fábrica').id);");
+  const factory = app.element('unitPanel').innerHTML;
+  for(const value of ['Processo de emissão da LO', 'Matriz LAIA', 'Responsável', 'Em andamento', '11/05/2026']){
+    assert.ok(factory.includes(value), value);
+  }
+  app.run("renderUnitDetail(MODEL.units.find(u=>u.nome === 'NY Tower').id);");
+  const tower = app.element('unitPanel').innerHTML;
+  assert.match(tower, /não tem um controle de etapas específico/);
+  assert.match(tower, /Fluxo transversal de referência \(21 etapas\)/);
+});
+
+test('controle de etapas das unidades nao publica nomes de pessoas', ()=>{
+  const window = {};
+  vm.runInNewContext(readFileSync(join(root, 'data', 'fluxo.js'), 'utf8'), {window});
+  const text = JSON.stringify(window.SPREADSHEET_REFERENCE.unitFlows);
+  assert.doesNotMatch(text, /André|Carolina|Mirian|Enrique/);
+});

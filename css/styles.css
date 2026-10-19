@@ -180,6 +180,9 @@ main{max-width:1180px;margin:0 auto;padding:22px 24px 60px;}
 .flow-atual{background:#E9F5F4;font-weight:700;}
 .flow-atual:before{border-color:var(--teal);background:var(--teal);}
 
+.unit-flow-table{min-width:760px;font-size:12.5px;}
+.unit-flow-table td{padding:7px 8px;}
+
 /* Calendar */
 .calendar-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
 .calendar-head h2{font-size:20px;margin:0 6px;min-width:180px;text-align:center;text-transform:capitalize;}
