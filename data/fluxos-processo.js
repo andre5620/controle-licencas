@@ -21,8 +21,8 @@
         ]},
         {id: 'LIC-02', nome: 'Identificar a licença a ser reportada', area: SUSTENTABILIDADE},
         {id: 'LIC-G2', decisao: 'Licença exigida ou dispensa?', opcoes: [
-          {id: 'exigida', rotulo: 'Licença exigida', status: 'Pendente'},
-          {id: 'dispensa', rotulo: 'Dispensa', status: 'Dispensada', etapa: 'LIC-D', fim: 'Dispensa de licença'}
+          {id: 'exigida', rotulo: 'Exigida (licença ou certidão de dispensa a requerer)', status: 'Pendente'},
+          {id: 'dispensa', rotulo: 'Dispensa sem requerimento', status: 'Dispensada', etapa: 'LIC-D', fim: 'Dispensa de licença'}
         ]},
         {id: 'LIC-I', nome: 'Licença indeferida – acionar consultoria e jurídico', area: SUSTENTABILIDADE, condicional: true},
         {id: 'LIC-03', nome: 'Acessar o sistema do órgão licenciador', area: SUSTENTABILIDADE},
@@ -35,12 +35,12 @@
           nota: 'Alinhar com o time Fiscal para realizar o pagamento antes do vencimento da taxa.'},
         {id: 'LIC-09', nome: 'Aguardar emissão junto ao órgão', area: SUSTENTABILIDADE, analise: true},
         {id: 'LIC-G3', decisao: 'Resultado do órgão', analise: true, opcoes: [
-          {id: 'emitida', rotulo: 'Licença emitida', status: 'Obtida'},
+          {id: 'emitida', rotulo: 'Emitida (licença, certidão ou dispensa)', status: 'Obtida'},
           {id: 'pendencia', rotulo: 'Pendência identificada', status: 'Pendente', retorna: 'LIC-P'},
           {id: 'indeferida', rotulo: 'Indeferida', status: 'Indeferida', retorna: 'LIC-I', reiniciaTudo: true}
         ]},
-        {id: 'LIC-10', nome: 'Registrar a licença emitida e atualizar o calendário', area: SUSTENTABILIDADE,
-          nota: 'Atualize a data de emissão e o vencimento da licença.'}
+        {id: 'LIC-10', nome: 'Registrar o documento emitido e atualizar o calendário', area: SUSTENTABILIDADE,
+          nota: 'Atualize a data de emissão e o vencimento do documento.'}
       ],
       etapasFinais: {
         'LIC-D': {id: 'LIC-D', nome: 'Registrar a dispensa e atualizar o calendário', area: SUSTENTABILIDADE}

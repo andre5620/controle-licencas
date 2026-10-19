@@ -170,18 +170,39 @@ main{max-width:1180px;margin:0 auto;padding:22px 24px 60px;}
 .flow-finished{border-left-color:var(--green);}
 .flow-kicker{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--teal);font-weight:700;}
 .flow-finished .flow-kicker{color:#357A2B;}
-.flow-steps{list-style:none;margin:0;padding:0;display:grid;gap:2px;}
-.flow-step{position:relative;display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 10px 6px 30px;border-radius:7px;font-size:12.5px;}
-.flow-step:before{content:"";position:absolute;left:10px;top:50%;width:8px;height:8px;border-radius:50%;transform:translateY(-50%);border:2px solid #C9CDD3;background:#fff;}
-.flow-step small{color:var(--ink-soft);font-size:11px;text-align:right;}
-.flow-gate:before{border-radius:1px;transform:translateY(-50%) rotate(45deg);}
-.flow-feito{color:var(--ink-soft);}
-.flow-feito:before{border-color:var(--green);background:var(--green);}
-.flow-atual{background:#E9F5F4;font-weight:700;}
-.flow-atual:before{border-color:var(--teal);background:var(--teal);}
+.flow-pending{margin:-4px 0 12px;padding-left:18px;font-size:12.5px;line-height:1.5;}
+.flow-pending small{color:var(--ink-soft);}
+.flow-import{border:1px dashed var(--teal);border-radius:10px;padding:10px 14px;margin-bottom:12px;background:#F4FAF9;}
+.flow-import .flow-help{margin-bottom:8px;}
+.act-step{color:var(--teal) !important;font-weight:600;}
 
-.unit-flow-table{min-width:760px;font-size:12.5px;}
-.unit-flow-table td{padding:7px 8px;}
+/* Flow diagram (raias do fluxograma) */
+.flow-diagram{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:#fff;}
+.dg-grid{display:grid;grid-auto-rows:minmax(88px,auto);column-gap:8px;min-width:max-content;position:relative;}
+.dg-band{grid-column:1 / -1;border-bottom:1px solid var(--line);background:#FBFBFA;}
+.dg-lane{grid-column:1;position:sticky;left:0;z-index:2;display:flex;align-items:center;padding:8px 10px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:var(--ink-soft);border-right:1px solid var(--line);background:#F0F0EE;}
+.dg-node{position:relative;z-index:1;align-self:center;margin:8px 0;padding:8px 9px 8px 28px;border:1px solid #D6DAE0;border-radius:8px;background:#fff;font-size:11.5px;line-height:1.3;}
+.dg-node strong{display:block;font-weight:600;}
+.dg-node small{display:block;margin-top:4px;color:var(--ink-soft);font-size:10.5px;}
+.dg-num{position:absolute;left:7px;top:8px;width:16px;height:16px;border-radius:50%;background:#E4E7EC;color:var(--ink-soft);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+.dg-gate{padding-left:30px;border-style:dashed;}
+.dg-diamond{position:absolute;left:9px;top:11px;width:11px;height:11px;transform:rotate(45deg);border:2px solid #9AA1AA;background:#fff;}
+.dg-feito{border-color:#B7DDB0;background:#F1F9EF;}
+.dg-feito .dg-num{background:var(--green);color:#fff;}
+.dg-feito .dg-diamond{border-color:var(--green);background:var(--green);}
+.dg-atual{border:2px solid var(--teal);background:#E9F5F4;box-shadow:0 2px 8px rgba(43,158,150,.18);}
+.dg-atual strong{font-weight:700;}
+.dg-atual .dg-num{background:var(--teal);color:#fff;}
+.dg-atual .dg-diamond{border-color:var(--teal);background:var(--teal);}
+.dg-inativo{opacity:.45;}
+.dg-legend{display:flex;gap:14px;flex-wrap:wrap;padding:8px 12px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-soft);position:sticky;left:0;}
+.dg-key{display:inline-flex;align-items:center;gap:6px;border:0;background:none;box-shadow:none;}
+.dg-key:before{content:"";width:12px;height:12px;border-radius:3px;border:1px solid #D6DAE0;background:#fff;}
+.dg-key.dg-feito:before{background:#F1F9EF;border-color:#B7DDB0;}
+.dg-key.dg-atual:before{background:#E9F5F4;border:2px solid var(--teal);}
+.unit-flow-license{margin-top:16px;}
+.unit-flow-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px;}
+.unit-flow-head p{margin:2px 0 0;font-size:12px;color:var(--teal);font-weight:600;}
 
 /* Calendar */
 .calendar-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}

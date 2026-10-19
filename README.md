@@ -30,9 +30,7 @@ O painel organiza os dados em unidades, tipos de processo, processos e etapas. A
 
 Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e dados de seguranca/AVCB.
 
-**Fluxo da unidade:** cada unidade exibe o controle de etapas da sua propria aba da planilha, com etapa, documento/acao, responsavel, status, prazo e observacao. As abas com tabela de etapas sao Fabrica, Balsas, LEM, Sinop e Querencia. Concordia, NY Tower e NetZero Farm nao tem tabela e mostram o fluxo transversal apenas como referencia. Os responsaveis aparecem por area (Sustentabilidade, Consultoria, Fabrica, Financeiro, Facilities, Juridico), sem nomes de pessoas.
-
-Versoes anteriores copiavam o fluxo transversal para todas as unidades. Essa copia e substituida automaticamente uma unica vez; fluxos diferentes dela sao preservados.
+**Fluxo da unidade:** a pagina da unidade mostra o diagrama do fluxograma de cada licenca da unidade que segue um fluxo. O diagrama e dividido em raias (Sustentabilidade, Areas internas, Fiscal) e indica, em cada etapa, quantas atividades ja foram concluidas. O controle de etapas da aba de cada unidade na planilha vira atividades da licenca (veja "Fluxo do processo").
 
 Use o seletor **Por licença** para acompanhar cada processo individualmente ou **Por unidade** para consultar o perfil do local, suas obrigações e todos os processos relacionados.
 
@@ -40,9 +38,9 @@ Use o seletor **Por licença** para acompanhar cada processo individualmente ou 
 
 O painel abre em **Por unidade**. O cadastro e independente das licencas: unidades sem processos tambem aparecem, com a opcao de criar a primeira licenca.
 
-Os cards exibem um resumo. Use **Abrir unidade** para acessar uma pagina completa com perfil, indicadores, comprovantes do OneDrive, obrigacoes ambientais, fluxo padrao e todas as licencas da unidade. Edicao de perfil, criacao de licenca e edicao de atividades continuam disponiveis nessa pagina.
+Os cards exibem um resumo. Use **Abrir unidade** para acessar uma pagina completa com perfil, indicadores, comprovantes do OneDrive, obrigacoes ambientais, fluxo da unidade (diagrama) e todas as licencas da unidade. Edicao de perfil, criacao de licenca e edicao de atividades continuam disponiveis nessa pagina.
 
-Na pagina completa, **Excluir unidade** remove o cadastro apos confirmacao, somente se nao houver licencas vinculadas (independentemente dos filtros). Remova ou transfira as licencas antes de excluir. A exclusao afeta todos os colaboradores e remove perfil, obrigacoes, fluxo e vinculos de comprovantes da unidade, mas nunca apaga arquivos do OneDrive. Unidades do catalogo inicial excluidas nao sao recriadas ao recarregar; **Restaurar dados** pode restaura-las. Em caso de falha de rede, a exclusao fica pendente neste navegador e pode ser reenviada por **Sincronizar**; conflitos continuam protegidos pelo controle de versao.
+Na pagina completa, **Excluir unidade** remove o cadastro apos confirmacao, somente se nao houver licencas vinculadas (independentemente dos filtros). Remova ou transfira as licencas antes de excluir. A exclusao afeta todos os colaboradores e remove perfil, obrigacoes e vinculos de comprovantes da unidade, mas nunca apaga arquivos do OneDrive. Unidades do catalogo inicial excluidas nao sao recriadas ao recarregar; **Restaurar dados** pode restaura-las. Em caso de falha de rede, a exclusao fica pendente neste navegador e pode ser reenviada por **Sincronizar**; conflitos continuam protegidos pelo controle de versao.
 
 Cada unidade tem um link direto no formato `Controle_Licencas_Solinftec.html#unit=ID`. E possivel compartilhar esse endereco, recarregar a pagina e usar Voltar/Avancar do navegador sem perder a unidade selecionada. O acesso continua exigindo login e permissao na organizacao; um ID inexistente mostra uma mensagem, sem abrir outra unidade. **Voltar as unidades** retorna aos cards, preservando os filtros da lista.
 
@@ -68,10 +66,18 @@ Cada licenca pode seguir um dos fluxogramas da Sustentabilidade: **Regulatorio L
 
 - Novas licencas recebem o fluxo escolhido no formulario. O fluxo de Outorgas e sugerido quando a categoria ou o tipo menciona "outorga".
 - Licencas ja cadastradas mostram o botao **Aplicar fluxo**. Ele acrescenta as etapas no inicio da tabela e mantem as atividades existentes.
-- O card mostra a etapa atual. Use **Concluir etapa** ou altere o status da atividade na tabela; `N/A` tambem conta como concluida.
+- **Atividades da planilha:** na licenca de *Licenciamento Ambiental* de Fabrica, Balsas, LEM, Sinop e Querencia, aplicar o fluxo de Licencas importa o controle de etapas da aba da unidade.
+  - Cada item vira uma atividade com responsavel (por area, sem nomes de pessoas), status, prazo e observacao.
+  - Cada atividade fica ligada a uma etapa do fluxograma. Por exemplo, Estatuto, Contrato e IPTU ficam em "Reunir e enviar documentos".
+  - Etapas sem item na planilha recebem uma atividade propria. As que ficaram para tras de uma etapa ja concluida sao marcadas como concluidas.
+  - As decisoes iniciais (Brasil; licenca ou certidao de dispensa a requerer) sao preenchidas.
+  - Licencas que ja seguiam o fluxo mostram **Importar atividades da planilha**.
+  - Outorgas e as demais licencas usam as etapas genericas.
+- Uma etapa do fluxograma fica concluida quando todas as suas atividades estao `Done` ou `N/A`. A coluna **Etapa do fluxo** da tabela de atividades permite religar uma atividade a outra etapa.
+- O card mostra a etapa atual, as atividades pendentes dela e o diagrama em raias. Use **Concluir etapa**, que conclui as atividades pendentes da etapa apos confirmacao, ou altere o status de cada atividade na tabela.
 - Nas decisoes do fluxograma, escolha a resposta pelos botoes. Cada resposta fica registrada no historico do fluxo:
   - **Jurisdicao (Brasil)**: "Nao" encerra o fluxo com status *Nao aplicavel*.
-  - **Licenca exigida ou dispensa**: "Dispensa" cria a etapa de registro da dispensa e marca a licenca como *Dispensada*.
+  - **Licenca exigida ou dispensa**: "Exigida" vale para licenca ou certidao de dispensa a requerer ao orgao (caminho completo); "Dispensa sem requerimento" cria a etapa de registro da dispensa e marca a licenca como *Dispensada*.
   - **Ha taxa aplicavel?** (Outorgas): "Nao" marca o pagamento como `N/A`.
   - **Resultado do orgao**:
     - *Emitida* muda o status para *Obtida*.
@@ -172,5 +178,7 @@ Depois de aplicar a migracao de organizacao unica, execute `supabase/test/defaul
 3. Acesse **Settings > Pages** e selecione **GitHub Actions** como fonte.
 4. Envie a branch `main` ou execute manualmente o workflow `Deploy to GitHub Pages`.
 5. Compartilhe a URL exibida em **Settings > Pages**.
+
+A cada nova versão, atualize `APP_VERSION` em `js/app.js` e o sufixo `?v=` dos arquivos CSS/JS em `Controle_Licencas_Solinftec.html`. Assim o navegador baixa todos os arquivos novos juntos, sem misturar versões em cache.
 
 O workflow publica somente os arquivos necessários da aplicação. Planilhas, PDF, SQL e a pasta Azure/SharePoint não são enviados para o site público.

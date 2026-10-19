@@ -642,11 +642,11 @@ test('pagina da unidade mostra todos os dados e licencas independente dos filtro
     MODEL.units[0].profile = {cnpj:'CNPJ completo',extintores:'12'};
     MODEL.units[0].evidenceLinks = [{name:'Pasta unidade',url:'https://1drv.ms/f/unit'}];
     MODEL.units[0].environmentalLicenses = [{tipo:'Obrigacao',numero:'123'}];
-    MODEL.units[0].standardFlow = [{nome:'Etapa padrao'}];`);
+`);
   app.element('fBusca').value = 'Sem resultado';
   app.run('renderUnitDetail(MODEL.units[0].id);');
   const html = app.element('unitPanel').innerHTML;
-  for(const value of ['CNPJ completo','Pasta unidade','Obrigacao','Etapa padrao','L-1','Voltar às unidades']){
+  for(const value of ['CNPJ completo','Pasta unidade','Obrigacao','L-1','Voltar às unidades']){
     assert.ok(html.includes(value), value);
   }
 });
@@ -906,51 +906,133 @@ test('calendario e fluxo renderizam conteudo escapado e as acoes do fluxograma',
   assert.match(app.run('renderFlow(lic)'), /data-option="nao"/);
 });
 
-test('cada unidade recebe o controle de etapas da propria aba da planilha', async ()=>{
-  const app = createApp({withCatalog: true});
+
+const sheetApp = async ()=>{
+  const app = createApp({withCatalog: true, withFlows: true});
   await app.run('loadData()');
-  const flow = name=>`MODEL.units.find(u=>u.nome === '${name}')`;
-  const sizes = {'Fábrica': 21, 'Balsas': 20, 'LEM': 15, 'Sinop': 15, 'Querência': 14,
-    'Concórdia': 0, 'NY Tower': 0, 'NetZero Farm': 0};
-  for(const [name, size] of Object.entries(sizes)){
-    assert.equal(app.run(`${flow(name)}.standardFlow.length`), size, name);
-  }
-  assert.equal(app.run(`${flow('Fábrica')}.standardFlowTitle`), 'Processo de emissão da LO');
-  assert.equal(app.run(`${flow('Fábrica')}.standardFlow[12].nome`), 'Matriz LAIA');
-  assert.equal(app.run(`${flow('Balsas')}.standardFlow[10].status`), 'Crítico');
-  assert.equal(app.run(`${flow('Sinop')}.standardFlow[0].nome`), 'Verificar enquadramento no sistema integrado MT');
-  assert.notEqual(app.run(`${flow('Balsas')}.standardFlow[0].nome`), app.run(`${flow('Fábrica')}.standardFlow[0].nome`));
-  assert.equal(app.run('MODEL.unitFlowVersion'), 1);
+  app.run(`var unitId = name=>MODEL.units.find(unit=>unit.nome === name).id;
+    var addLicense = (id, unit, categoria = 'Licenciamento Ambiental')=>{
+      const lic = {id, unidadeId: unitId(unit), unidade: unit, categoria, tipoLicenca: 'LO', status: 'Pendente',
+        activities: [{name: 'Atividade antiga', owner: '', status: 'Não iniciado', date: '', observacao: ''}]};
+      DATA.push(lic);
+      return lic;
+    };
+    var names = (lic, id)=>flowActivities(lic, id).map(activity=>activity.name).join('|');`);
+  return app;
+};
+
+test('aplicar fluxo importa a tabela da unidade ligando cada atividade a uma etapa do fluxograma', async ()=>{
+  const app = await sheetApp();
+  app.run("var lic = addLicense('L-004', 'Fábrica'); applyFlow(lic, 'licenca');");
+  assert.equal(app.run("lic.activities.filter(activity=>activity.origem === 'planilha').length"), 21);
+  assert.equal(app.run('lic.fluxo.planilhaImportada'), true);
+  assert.equal(app.run("lic.fluxo.decisoes['LIC-G1'] + '/' + lic.fluxo.decisoes['LIC-G2']"), 'sim/exigida');
+  assert.equal(app.run("names(lic, 'LIC-04')"), 'Visita técnica inicial (aspectos e impactos)|Visita complementar com técnico (equipamentos)');
+  assert.equal(app.run("flowActivity(lic, 'LIC-01').id"), 'L-004-LIC-01');
+  assert.equal(app.run("flowActivity(lic, 'LIC-01').status"), 'Done');
+  assert.equal(app.run("flowActivity(lic, 'LIC-03').observacao"), 'Considerada concluída na importação da planilha');
+  assert.equal(app.run("lic.activities.find(activity=>activity.name === 'Matriz LAIA').status"), 'Working on it');
+  assert.equal(app.run("lic.activities.find(activity=>activity.name === 'Matriz LAIA').owner"), 'Consultoria');
+  assert.equal(app.run('lic.activities[lic.activities.length - 1].name'), 'Atividade antiga');
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-02');
+  app.run("flowActivities(lic, 'LIC-02').forEach(activity=>{ activity.status = 'Done'; });");
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-05');
+  assert.equal(app.run("stepDone(lic, 'LIC-05')"), false);
 });
 
-test('copia antiga do fluxo transversal e substituida uma vez, preservando fluxos personalizados', ()=>{
-  const app = createApp({withCatalog: true});
-  const transversal = JSON.stringify([{id: 'FT-01', ordem: 1, nome: 'Estatuto', obrigatoria: true}]);
-  app.run(`var migrated = applyReferenceData({version: 2, unitCatalogVersion: 1, processTypes: [], processes: [], units: [
-    {id: 'U1', nome: 'Balsas', standardFlow: ${transversal}},
-    {id: 'U2', nome: 'NY Tower', standardFlow: ${transversal}},
-    {id: 'U3', nome: 'Sinop', standardFlow: [{id: 'X', nome: 'Etapa personalizada'}]}
-  ]});`);
-  assert.equal(app.run('migrated.units[0].standardFlow.length'), 20);
-  assert.equal(app.run('migrated.units[0].standardFlow[0].id'), 'UF-01');
-  assert.equal(app.run('migrated.units[1].standardFlow.length'), 0);
-  assert.equal(app.run('migrated.units[2].standardFlow[0].nome'), 'Etapa personalizada');
-  app.run("migrated.units[0].standardFlow = []; migrated = applyReferenceData(migrated);");
-  assert.equal(app.run('migrated.units[0].standardFlow.length'), 0);
+test('etapa so conclui com todas as atividades; pendencia reinicia todas as atividades do envio', async ()=>{
+  const app = await sheetApp();
+  app.run("var lic = addLicense('L-012', 'Balsas'); applyFlow(lic, 'licenca');");
+  const ccbm = "lic.activities.find(activity=>activity.name === 'CCBM em nome do CNPJ')";
+  assert.equal(app.run(`${ccbm}.status`), 'Stuck');
+  assert.match(app.run(`${ccbm}.observacao`), /^Prazo: Urgente · Certificado no CPF/);
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-05');
+  app.run("completeFlowStep(lic, 'LIC-05')");
+  assert.equal(app.run("flowActivities(lic, 'LIC-05').every(activity=>activity.status === 'Done')"), true);
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-09');
+  assert.equal(app.run('lic.status'), 'Em análise');
+  app.run("completeFlowStep(lic, 'LIC-09'); decideFlow(lic, 'LIC-G3', 'pendencia');");
+  assert.equal(app.run("flowActivities(lic, 'LIC-06').map(activity=>activity.status).join(',')"), 'Não iniciado,Não iniciado');
+  assert.equal(app.run("flowActivities(lic, 'LIC-09')[0].status"), 'Não iniciado');
+  assert.equal(app.run("flowActivities(lic, 'LIC-08')[0].status"), 'Done');
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-P');
 });
 
-test('pagina da unidade mostra a tabela de etapas ou o fluxo transversal como referencia', async ()=>{
-  const app = createApp({withCatalog: true});
-  await app.run('loadData()');
-  app.run("renderUnitDetail(MODEL.units.find(u=>u.nome === 'Fábrica').id);");
-  const factory = app.element('unitPanel').innerHTML;
-  for(const value of ['Processo de emissão da LO', 'Matriz LAIA', 'Responsável', 'Em andamento', '11/05/2026']){
-    assert.ok(factory.includes(value), value);
+test('etapas sem item na planilha recebem atividade generica e nao travam o fluxo', async ()=>{
+  const app = await sheetApp();
+  app.run("var lic = addLicense('L-010', 'Sinop'); applyFlow(lic, 'licenca');");
+  for(const step of ['LIC-07', 'LIC-08']){
+    assert.equal(app.run(`flowActivity(lic, '${step}').id`), `L-010-${step}`);
+    assert.equal(app.run(`flowActivity(lic, '${step}').status`), 'Done');
   }
-  app.run("renderUnitDetail(MODEL.units.find(u=>u.nome === 'NY Tower').id);");
-  const tower = app.element('unitPanel').innerHTML;
-  assert.match(tower, /não tem um controle de etapas específico/);
-  assert.match(tower, /Fluxo transversal de referência \(21 etapas\)/);
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-05');
+});
+
+test('outorgas e outras licencas da unidade continuam com as etapas genericas', async ()=>{
+  const app = await sheetApp();
+  app.run(`var main = addLicense('L-004', 'Fábrica');
+    var water = addLicense('L-005', 'Fábrica', 'Outorga de Água'); applyFlow(water, 'outorga');
+    var other = addLicense('L-099', 'Fábrica'); applyFlow(other, 'licenca');`);
+  assert.equal(app.run("water.activities.some(activity=>activity.origem === 'planilha')"), false);
+  assert.equal(app.run("other.activities.some(activity=>activity.origem === 'planilha')"), false);
+  assert.equal(app.run('spreadsheetFlowFor(main).etapas.length'), 21);
+  assert.equal(app.run("spreadsheetFlowFor(addLicense('L-100', 'NY Tower'))"), null);
+});
+
+test('licenca que ja seguia o fluxo importa a planilha uma vez sem duplicar etapas genericas', async ()=>{
+  const app = await sheetApp();
+  app.run(`var lic = addLicense('L-012', 'Balsas');
+    var saved = SPREADSHEET_REFERENCE.unitFlows; delete SPREADSHEET_REFERENCE.unitFlows;
+    applyFlow(lic, 'licenca'); completeFlowStep(lic, 'LIC-01');
+    SPREADSHEET_REFERENCE.unitFlows = saved;`);
+  assert.match(app.run('renderFlow(lic)'), /Importar atividades da planilha/);
+  app.run('importSpreadsheetFlow(lic)');
+  assert.equal(app.run("lic.activities.filter(activity=>activity.origem === 'planilha').length"), 20);
+  assert.equal(app.run("flowActivities(lic, 'LIC-02').every(activity=>activity.origem === 'planilha')"), true);
+  assert.equal(app.run("flowActivities(lic, 'LIC-01').length"), 1);
+  assert.equal(app.run('new Set(lic.activities.map(activity=>activity.id)).size === lic.activities.length'), true);
+  assert.doesNotMatch(app.run('renderFlow(lic)'), /Importar atividades da planilha/);
+  assert.throws(()=>app.run('importSpreadsheetFlow(lic)'), /já foram importadas/);
+});
+
+test('coluna etapa do fluxo religa a atividade e persiste a ligacao', async ()=>{
+  let stored;
+  const app = createApp({withCatalog: true, withFlows: true, service: {save: async model=>{ stored = structuredClone(model); return 3; }}});
+  await app.run('loadData()');
+  app.run(`var lic = {id: 'L-004', unidadeId: MODEL.units.find(unit=>unit.nome === 'Fábrica').id, unidade: 'Fábrica',
+      categoria: 'Licenciamento Ambiental', status: 'Pendente', activities: []};
+    DATA.push(lic); applyFlow(lic, 'licenca');`);
+  const markup = app.run('renderActivities(lic)');
+  assert.match(markup, /Etapa do fluxo/);
+  assert.match(markup, /data-af="etapaPadraoId"/);
+  assert.match(markup, /value="LIC-04" selected/);
+  app.run("lic.activities.find(activity=>activity.name === 'Definição de cronograma (Monday.com)').etapaPadraoId = '';");
+  assert.equal(app.run('currentFlowNodeId(lic)'), 'LIC-05');
+  assert.equal(await app.run('saveData()'), true);
+  const saved = stored.processes.find(process=>process.id === 'L-004');
+  assert.equal(saved.activities.find(activity=>activity.name === 'Matriz LAIA').etapaPadraoId, 'LIC-05');
+  assert.equal(saved.fluxo.planilhaImportada, true);
+});
+
+test('diagrama em raias mostra contadores e a pagina da unidade exibe o fluxo das licencas', async ()=>{
+  const app = await sheetApp();
+  app.run(`var lic = addLicense('L-004', 'Fábrica'); applyFlow(lic, 'licenca');
+    lic.activities[0].name = '<b>X</b>';`);
+  const diagram = app.run('renderFlowDiagram(lic)');
+  for(const value of ['Sustentabilidade (Analista)', 'Áreas internas (Facilities, Jurídico, Fábrica)', 'Fiscal / Financeiro',
+    '2/2 atividades', 'dg-atual', 'Exigida (licença ou certidão de dispensa a requerer)']){
+    assert.ok(diagram.includes(value), value);
+  }
+  assert.doesNotMatch(diagram, /<b>X<\/b>/);
+  app.run("renderUnitDetail(unitId('Fábrica'));");
+  const unit = app.element('unitPanel').innerHTML;
+  assert.match(unit, /Fluxo da unidade/);
+  assert.match(unit, /dg-grid/);
+  assert.match(unit, /data-open-unit-license="L-004"/);
+  app.run("addLicense('L-012', 'Balsas'); renderUnitDetail(unitId('Balsas'));");
+  assert.match(app.element('unitPanel').innerHTML, /licença L-012 importa as 20 atividades da planilha/);
+  app.run("renderUnitDetail(unitId('NY Tower'));");
+  assert.match(app.element('unitPanel').innerHTML, /Nenhuma licença desta unidade segue o fluxograma/);
 });
 
 test('controle de etapas das unidades nao publica nomes de pessoas', ()=>{

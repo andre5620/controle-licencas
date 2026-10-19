@@ -2,6 +2,18 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.12.0] - 2026-10-19
+
+### Atividades da planilha ligadas ao fluxograma
+
+- Ao aplicar o fluxo de Licenças na licença de Licenciamento Ambiental, as atividades da aba da unidade (Fábrica, Balsas, LEM, Sinop e Querência) são importadas com responsável, status, prazo e observação, cada uma ligada a uma etapa do fluxograma.
+- Uma etapa do fluxograma é concluída quando todas as suas atividades estão concluídas; etapas sem item na planilha recebem uma atividade própria.
+- Coluna "Etapa do fluxo" na tabela de atividades para religar uma atividade a outra etapa.
+- Diagrama em raias (Sustentabilidade, Áreas internas, Fiscal) com o andamento de cada etapa, na página da unidade e no card da licença.
+- Botão "Importar atividades da planilha" para licenças que já seguiam o fluxo.
+- Dispensas requeridas ao órgão seguem o caminho completo do fluxograma.
+- Endereços de CSS e scripts carregam o número da versão para que o navegador baixe todos os arquivos novos juntos.
+
 ## [1.11.1] - 2026-10-19
 
 ### Correção

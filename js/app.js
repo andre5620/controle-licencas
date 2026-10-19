@@ -4,7 +4,7 @@ const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 const PROCESS_FLOWS = window.PROCESS_FLOWS || {};
 
-const APP_VERSION = '1.11.1';
+const APP_VERSION = '1.12.0';
 const LICENSE_STATUSES = ['Pendente','Em análise','Condicionada','Obtida','Dispensada','Indeferida','Não aplicável'];
 const OPEN_STATUSES = ['Pendente','Em análise','Condicionada','Indeferida'];
 const ACTIVITY_STATUSES = ['Não iniciado','Working on it','Stuck','Done','N/A'];
@@ -187,10 +187,21 @@ function modelFromLegacyData(records){
   return applyReferenceData({...MODEL, version: 2, units, processTypes, processes});
 }
 
+function normalizeKey(value){
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+}
+
+/* Busca o registro da planilha pelo nome da unidade, ignorando acentos. */
+function unitReference(table, unit){
+  const direct = table[unit.nome] || table[unit.codigo];
+  if(direct) return direct;
+  const key = normalizeKey(unit.nome || unit.codigo);
+  const match = Object.entries(table).find(([name])=>normalizeKey(name)===key);
+  return match ? match[1] : null;
+}
+
 function applyReferenceData(model){
   const references = SPREADSHEET_REFERENCE?.unitProfiles || {};
-  const unitFlows = SPREADSHEET_REFERENCE?.unitFlows || {};
-  const normalizeKey = value=>String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   if(!model.unitCatalogVersion){
     model.units = model.units || [];
     (SPREADSHEET_REFERENCE?.unitCatalog || []).forEach((seed, index)=>{
@@ -202,32 +213,11 @@ function applyReferenceData(model){
     });
     model.unitCatalogVersion = 1;
   }
-  const lookup = (table, unit)=>{
-    const direct = table[unit.nome] || table[unit.codigo];
-    if(direct) return direct;
-    const key = normalizeKey(unit.nome || unit.codigo);
-    const match = Object.entries(table).find(([name])=>normalizeKey(name)===key);
-    return match ? match[1] : null;
-  };
-  const buildFlow = spec=>(spec?.etapas || []).map((step, index)=>({
-    id: `UF-${String(index+1).padStart(2,'0')}`, ordem: index + 1, ...step, obrigatoria: true
+  model.units = (model.units || []).map(unit=>({
+    ...unit,
+    profile: {...(unitReference(references, unit) || {}), ...(unit.profile || {})},
+    environmentalLicenses: unit.environmentalLicenses || SPREADSHEET_LICENSES[unit.nome] || SPREADSHEET_LICENSES[unit.codigo] || []
   }));
-  /* Versões anteriores copiavam o fluxo transversal (IDs FT-) para todas as unidades. */
-  const isTransversalCopy = flow=>Array.isArray(flow) && flow.every(step=>/^FT-\d+$/.test(step?.id || ''));
-  const migrateFlows = model.unitFlowVersion !== 1;
-  model.units = (model.units || []).map(unit=>{
-    const reference = lookup(references, unit) || {};
-    const replaceFlow = !Array.isArray(unit.standardFlow) || (migrateFlows && isTransversalCopy(unit.standardFlow));
-    const spec = replaceFlow ? lookup(unitFlows, unit) : null;
-    return {
-      ...unit,
-      profile: {...reference, ...(unit.profile || {})},
-      environmentalLicenses: unit.environmentalLicenses || SPREADSHEET_LICENSES[unit.nome] || SPREADSHEET_LICENSES[unit.codigo] || [],
-      standardFlow: replaceFlow ? buildFlow(spec) : unit.standardFlow,
-      standardFlowTitle: replaceFlow ? (spec?.titulo || '') : (unit.standardFlowTitle || '')
-    };
-  });
-  model.unitFlowVersion = 1;
   return model;
 }
 
@@ -251,8 +241,7 @@ function flattenModel(model){
       orgaoEmissor: process.orgaoEmissor || type.orgaoEsperado || '',
       activities: process.activities || process.etapas || [],
       perfilUnidade: unit.profile || {},
-      licencasUnidade: unit.environmentalLicenses || [],
-      fluxoPadrao: unit.standardFlow || []
+      licencasUnidade: unit.environmentalLicenses || []
     };
   });
 }
@@ -276,8 +265,14 @@ function flowActivity(lic, id){
   return (lic.activities || []).find(activity=>activity.etapaPadraoId === id);
 }
 
+function flowActivities(lic, id){
+  return (lic.activities || []).filter(activity=>activity.etapaPadraoId === id);
+}
+
+/* Uma etapa do fluxograma agrupa uma ou mais atividades; conclui quando todas estão concluídas. */
 function stepDone(lic, id){
-  return STEP_DONE.includes(flowActivity(lic, id)?.status);
+  const activities = flowActivities(lic, id);
+  return activities.length > 0 && activities.every(activity=>STEP_DONE.includes(activity.status));
 }
 
 /* Percorre o fluxograma: etapas concluídas avançam; decisões registradas escolhem o caminho. */
@@ -331,15 +326,10 @@ function flowSummary(lic){
   return node.decisao ? `Decisão: ${node.decisao}` : `Etapa atual: ${node.nome}`;
 }
 
-function ensureFlowActivity(lic, def, node){
-  const existing = flowActivity(lic, node.id);
-  if(existing) return existing;
-  const activity = {
-    id: `${lic.id}-${node.id}`, etapaPadraoId: node.id, name: node.nome,
-    owner: node.area || '', status: 'Não iniciado', date: '', observacao: ''
-  };
+/* Insere a atividade na ordem do fluxograma, depois das que já estão na mesma etapa. */
+function insertFlowActivity(lic, def, activity){
   const order = flowOrder(def);
-  const rank = order.indexOf(node.id);
+  const rank = order.indexOf(activity.etapaPadraoId);
   lic.activities = lic.activities || [];
   let position = lic.activities.findIndex(item=>order.indexOf(item.etapaPadraoId) > rank);
   if(position < 0){
@@ -347,6 +337,76 @@ function ensureFlowActivity(lic, def, node){
   }
   lic.activities.splice(position, 0, activity);
   return activity;
+}
+
+function genericFlowActivityId(lic, nodeId){
+  return `${lic.id}-${nodeId}`;
+}
+
+function ensureFlowActivity(lic, def, node){
+  return flowActivity(lic, node.id) || insertFlowActivity(lic, def, {
+    id: genericFlowActivityId(lic, node.id), etapaPadraoId: node.id, name: node.nome,
+    owner: node.area || '', status: 'Não iniciado', date: '', observacao: ''
+  });
+}
+
+/* ---------------------------------------------------------------
+   PLANILHA DA UNIDADE -> ATIVIDADES DA LICENÇA
+--------------------------------------------------------------- */
+const SHEET_STATUS = {'Concluído': 'Done', 'Em andamento': 'Working on it', 'Pendente': 'Não iniciado', 'Crítico': 'Stuck'};
+
+/* A tabela da aba da unidade pertence à licença de Licenciamento Ambiental dessa unidade. */
+function spreadsheetFlowFor(lic){
+  if(!/licenciamento ambiental/i.test(lic.categoria || '')) return null;
+  const unit = MODEL?.units?.find(item=>item.id === lic.unidadeId);
+  const spec = unit && unitReference(SPREADSHEET_REFERENCE?.unitFlows || {}, unit);
+  if(!spec?.etapas?.length) return null;
+  const target = DATA.find(item=>item.unidadeId === unit.id && /licenciamento ambiental/i.test(item.categoria || ''));
+  return !target || target.id === lic.id ? spec : null;
+}
+
+function sheetActivity(lic, step, index){
+  const dated = /^\d{4}-\d{2}-\d{2}$/.test(step.prazo || '');
+  return {
+    id: `${lic.id}-PL-${String(index + 1).padStart(2,'0')}`, etapaPadraoId: step.etapaFluxo,
+    grupo: step.etapa || '', name: step.nome, owner: step.responsavel || '',
+    status: SHEET_STATUS[step.status] || 'Não iniciado', date: dated ? step.prazo : '', dataRealizada: '',
+    observacao: [!dated && step.prazo ? `Prazo: ${step.prazo}` : '', step.observacao].filter(Boolean).join(' · '),
+    origem: 'planilha'
+  };
+}
+
+function importSpreadsheetActivities(lic, def, spec){
+  const before = currentFlowNodeId(lic);
+  const imported = spec.etapas.map((step, index)=>sheetActivity(lic, step, index))
+    .filter(activity=>def.nos.some(node=>node.id === activity.etapaPadraoId && !node.decisao));
+  const covered = new Set(imported.map(activity=>activity.etapaPadraoId));
+  lic.activities = (lic.activities || []).filter(activity=>!(covered.has(activity.etapaPadraoId)
+    && activity.id === genericFlowActivityId(lic, activity.etapaPadraoId) && activity.status === 'Não iniciado'));
+  imported.forEach(activity=>insertFlowActivity(lic, def, activity));
+  def.nos.filter(node=>!node.decisao && !node.condicional).forEach(node=>ensureFlowActivity(lic, def, node));
+  /* Etapas genéricas anteriores a uma etapa já concluída na planilha não podem travar o fluxo. */
+  const order = flowOrder(def);
+  const furthest = Math.max(-1, ...imported.filter(activity=>STEP_DONE.includes(activity.status))
+    .map(activity=>order.indexOf(activity.etapaPadraoId)));
+  lic.activities.forEach(activity=>{
+    if(activity.id !== genericFlowActivityId(lic, activity.etapaPadraoId) || activity.status !== 'Não iniciado') return;
+    if(order.indexOf(activity.etapaPadraoId) >= furthest) return;
+    Object.assign(activity, {status: 'Done', observacao: activity.observacao || 'Considerada concluída na importação da planilha'});
+  });
+  lic.fluxo.decisoes = lic.fluxo.decisoes || {};
+  const preset = [['LIC-G1', 'sim'], ['LIC-G2', 'exigida']].filter(([gate])=>!lic.fluxo.decisoes[gate]);
+  preset.forEach(([gate, option])=>{ lic.fluxo.decisoes[gate] = option; });
+  lic.fluxo.planilhaImportada = true;
+  addFlowHistory(lic, `${imported.length} atividades importadas da planilha da unidade${preset.length ? '; decisões iniciais definidas pela planilha' : ''}`);
+  syncFlowStatus(lic, before);
+}
+
+function importSpreadsheetFlow(lic){
+  const spec = spreadsheetFlowFor(lic);
+  if(lic.fluxo?.tipo !== 'licenca' || !spec) throw new Error('Não há planilha da unidade para esta licença.');
+  if(lic.fluxo.planilhaImportada) throw new Error('As atividades da planilha já foram importadas.');
+  importSpreadsheetActivities(lic, PROCESS_FLOWS.licenca, spec);
 }
 
 function resetFlowActivity(activity){
@@ -377,9 +437,11 @@ function applyFlow(lic, tipo){
   const def = PROCESS_FLOWS[tipo];
   if(!def) throw new Error('Selecione um fluxo válido.');
   if(lic.fluxo) throw new Error('Esta licença já segue um fluxo.');
+  const spec = tipo === 'licenca' ? spreadsheetFlowFor(lic) : null;
   lic.fluxo = {tipo, ciclo: 1, decisoes: {}, extras: [], historico: []};
-  def.nos.filter(node=>!node.decisao && !node.condicional).forEach(node=>ensureFlowActivity(lic, def, node));
   addFlowHistory(lic, `Fluxo ${def.nome} aplicado`);
+  if(spec) importSpreadsheetActivities(lic, def, spec);
+  else def.nos.filter(node=>!node.decisao && !node.condicional).forEach(node=>ensureFlowActivity(lic, def, node));
 }
 
 function completeFlowStep(lic, stepId){
@@ -388,9 +450,11 @@ function completeFlowStep(lic, stepId){
   if(!node || node.decisao || node.id !== stepId){
     throw new Error('Esta etapa não é mais a etapa atual. Carregue o servidor.');
   }
-  const activity = ensureFlowActivity(lic, flow.def, node);
-  activity.status = 'Done';
-  activity.dataRealizada = todayStr();
+  ensureFlowActivity(lic, flow.def, node);
+  flowActivities(lic, node.id).filter(activity=>!STEP_DONE.includes(activity.status)).forEach(activity=>{
+    activity.status = 'Done';
+    activity.dataRealizada = todayStr();
+  });
   syncFlowStatus(lic, stepId);
 }
 
@@ -418,18 +482,16 @@ function decideFlow(lic, gateId, optionId){
       }
       if(item.repete === false && !option.reiniciaTudo) return;
       if(item.decisao) delete state.decisoes[item.id];
-      else{
-        const activity = flowActivity(lic, item.id);
-        if(activity) resetFlowActivity(activity);
-      }
+      else flowActivities(lic, item.id).forEach(resetFlowActivity);
     });
   }else{
     state.decisoes[gateId] = optionId;
     (option.pula || []).forEach(id=>{
-      const activity = ensureFlowActivity(lic, def, flowNode(def, id));
-      if(activity.status === 'Done') return;
-      Object.assign(activity, {status: 'N/A', puladaPeloFluxo: true,
-        observacao: activity.observacao || `Não aplicável: ${node.decisao} ${option.rotulo}`});
+      ensureFlowActivity(lic, def, flowNode(def, id));
+      flowActivities(lic, id).filter(activity=>activity.status !== 'Done').forEach(activity=>{
+        Object.assign(activity, {status: 'N/A', puladaPeloFluxo: true,
+          observacao: activity.observacao || `Não aplicável: ${node.decisao} ${option.rotulo}`});
+      });
     });
     if(option.etapa) ensureFlowActivity(lic, def, flowNode(def, option.etapa));
   }
@@ -872,34 +934,62 @@ function renderUnitDetail(id){
   attachEvidenceEvents(root);
 }
 
-function unitFlowStatusClass(status){
-  const s = (status || '').toLowerCase();
-  if(s === 'concluído') return 'b-obtida';
-  if(s === 'em andamento') return 'b-analise';
-  if(s === 'crítico') return 'b-indeferida';
-  return 'b-pendente';
+/* Diagrama em raias do fluxograma, com o andamento das atividades de cada etapa. */
+function renderFlowDiagram(lic, flow = walkFlow(lic)){
+  if(!flow) return '';
+  const {def} = flow;
+  const states = new Map(flow.items.map(item=>[item.node.id, item]));
+  const extras = lic.fluxo.extras || [];
+  const nodes = [];
+  def.nos.forEach(node=>{
+    if(node.condicional && !extras.includes(node.id)) return;
+    nodes.push(node);
+    const final = states.get(node.id)?.option?.etapa;
+    if(final && states.has(final)) nodes.push(flowNode(def, final));
+  });
+  const lanes = [...new Set(nodes.map(node=>node.area).filter(Boolean))];
+  let lane = lanes[0];
+  const cells = nodes.map((node, index)=>{
+    if(node.area) lane = node.area;
+    const item = states.get(node.id);
+    const state = item?.state || 'inativo';
+    const position = `grid-row:${lanes.indexOf(lane) + 1};grid-column:${index + 2}`;
+    if(node.decisao){
+      return `<div class="dg-node dg-gate dg-${state}" style="${position}">
+        <span class="dg-diamond" aria-hidden="true"></span><strong>${esc(node.decisao)}</strong>
+        <small>${item?.option ? esc(item.option.rotulo) : state === 'atual' ? 'Aguardando decisão' : 'Decisão'}</small></div>`;
+    }
+    const activities = flowActivities(lic, node.id);
+    const done = activities.filter(activity=>STEP_DONE.includes(activity.status)).length;
+    return `<div class="dg-node dg-${state}" style="${position}" title="${esc(activities.map(activity=>`${activity.status} · ${activity.name}`).join('\n'))}">
+      <span class="dg-num">${index + 1}</span><strong>${esc(node.nome)}</strong>
+      <small>${done}/${activities.length} ${activities.length === 1 ? 'atividade' : 'atividades'}</small></div>`;
+  }).join('');
+  const columns = `grid-template-columns:118px repeat(${nodes.length}, 132px)`;
+  return `<div class="flow-diagram"><div class="dg-grid" style="${columns}">
+      ${lanes.map((name, index)=>`<div class="dg-band" style="grid-row:${index + 1}"></div><div class="dg-lane" style="grid-row:${index + 1}">${esc(name)}</div>`).join('')}
+      ${cells}
+    </div>
+    <div class="dg-legend"><span class="dg-key dg-feito">Concluída</span><span class="dg-key dg-atual">Atual</span><span class="dg-key dg-futuro">A fazer</span></div>
+  </div>`;
 }
 
 function renderUnitFlow(unit){
-  const flow = unit.standardFlow || [];
-  const title = `Fluxo da unidade${unit.standardFlowTitle ? ` · ${esc(unit.standardFlowTitle)}` : ''}`;
-  if(!flow.length){
-    const reference = SPREADSHEET_REFERENCE?.flowTemplate || [];
-    return `<h2>${title}</h2><p>A planilha não tem um controle de etapas específico para esta unidade.</p>
-      ${reference.length ? `<details class="standard-flow"><summary>Fluxo transversal de referência (${reference.length} etapas)</summary><ol>${reference.map(name=>`<li>${esc(name)}</li>`).join('')}</ol></details>` : ''}`;
+  const licenses = DATA.filter(lic=>lic.unidadeId === unit.id);
+  const flows = licenses.filter(lic=>PROCESS_FLOWS[lic.fluxo?.tipo]);
+  const target = licenses.find(lic=>spreadsheetFlowFor(lic));
+  const hint = target && !target.fluxo
+    ? `<p class="flow-help">Aplicar o fluxo de Licenças na licença ${esc(target.id)} importa as ${spreadsheetFlowFor(target).etapas.length} atividades da planilha desta unidade, cada uma ligada a uma etapa do fluxograma.</p>` : '';
+  if(!flows.length){
+    return `<h2>Fluxo da unidade</h2><p>Nenhuma licença desta unidade segue o fluxograma ainda. Abra uma licença abaixo e use Aplicar fluxo.</p>${hint}`;
   }
-  if(!flow.some(step=>step.responsavel || step.status)){
-    return `<h2>${title}</h2><ol>${flow.map(step=>`<li>${esc(step.nome)}</li>`).join('')}</ol>`;
-  }
-  const deadline = value=>/^\d{4}-\d{2}-\d{2}$/.test(value || '') ? fmtDate(value) : (value || '—');
-  return `<h2>${title}</h2>
-    <table class="act-table unit-flow-table">
-      <thead><tr><th>Etapa</th><th>Documento / ação</th><th>Responsável</th><th>Status</th><th>Prazo</th><th>Observação</th></tr></thead>
-      <tbody>${flow.map(step=>`<tr><td>${esc(step.etapa)}</td><td>${esc(step.nome)}</td><td>${esc(step.responsavel)}</td>
-        <td><span class="badge ${unitFlowStatusClass(step.status)}">${esc(step.status || '—')}</span></td>
-        <td>${esc(deadline(step.prazo))}</td><td>${esc(step.observacao)}</td></tr>`).join('')}</tbody>
-    </table>
-    <p class="flow-help">Situação registrada na planilha "Controle de etapas - Fluxo" (aba da unidade).</p>`;
+  return `<h2>Fluxo da unidade</h2>${hint}
+    ${flows.map(lic=>`<div class="unit-flow-license">
+      <div class="unit-flow-head"><div><strong>${esc(lic.id)} · ${esc(lic.tipoLicenca || lic.categoria || '—')}</strong>
+        <p>${esc(PROCESS_FLOWS[lic.fluxo.tipo].nome)} · ${esc(flowSummary(lic))}</p></div>
+        <button class="btn" data-open-unit-license="${esc(lic.id)}">Abrir licença</button></div>
+      ${renderFlowDiagram(lic)}
+    </div>`).join('')}`;
 }
 
 function renderUnitPanel(list){
@@ -942,6 +1032,13 @@ function attachUnitPanelEvents(){
     void deleteUnit(button.dataset.deleteUnit);
   }));
   document.querySelectorAll('[data-back-units]').forEach(button=>button.addEventListener('click', ()=>navigatePanel('#units')));
+  document.querySelectorAll('[data-open-unit-license]').forEach(button=>button.addEventListener('click', ()=>{
+    const id = button.dataset.openUnitLicense;
+    expandedIds.add(id);
+    render();
+    const card = window.CSS ? document.querySelector(`.lic-card[data-id="${window.CSS.escape(id)}"]`) : null;
+    card?.scrollIntoView({block: 'start'});
+  }));
   document.querySelectorAll('[data-edit-unit]').forEach(button=>button.addEventListener('click', ()=>{
     openUnitEditor(button.dataset.editUnit);
   }));
@@ -1078,23 +1175,37 @@ function renderFields(lic){
 function renderUnitProfile(lic){
   const profile = lic.perfilUnidade || {};
   const licenses = lic.licencasUnidade || [];
-  const flow = lic.fluxoPadrao || [];
   const fields = PROFILE_FIELDS.filter(([, key])=>profile[key]);
   if(!fields.length) return '';
   return `<div class="section-label">Perfil da unidade</div>
     <div class="field-grid unit-profile">
       ${fields.map(([label, key])=>`<div class="field ${['endereco','atividadeAmbiental','atividadesConduzidas'].includes(key)?'wide':''}"><label>${label}</label><div class="profile-value">${esc(profile[key])}</div></div>`).join('')}
     </div>
-    ${licenses.length?`<details class="standard-flow"><summary>Obrigações ambientais (${licenses.length})</summary><ul>${licenses.map(item=>`<li><strong>${esc(item.tipo)}</strong> · ${esc(item.orgao)} · ${esc(item.numero || 'sem número')} · ${esc(item.risco)}</li>`).join('')}</ul></details>`:''}
-    ${flow.length?`<details class="standard-flow"><summary>Fluxo da unidade (${flow.length} etapas)</summary><ol>${flow.map(step=>`<li>${esc(step.nome)}${step.status ? ` — ${esc(step.status)}` : ''}</li>`).join('')}</ol></details>`:''}`;
+    ${licenses.length?`<details class="standard-flow"><summary>Obrigações ambientais (${licenses.length})</summary><ul>${licenses.map(item=>`<li><strong>${esc(item.tipo)}</strong> · ${esc(item.orgao)} · ${esc(item.numero || 'sem número')} · ${esc(item.risco)}</li>`).join('')}</ul></details>`:''}`;
+}
+
+function flowStepOptions(lic){
+  const def = PROCESS_FLOWS[lic.fluxo?.tipo];
+  if(!def) return [];
+  const extras = lic.fluxo.extras || [];
+  return [
+    ...def.nos.filter(node=>!node.decisao && (!node.condicional || extras.includes(node.id))),
+    ...Object.values(def.etapasFinais || {}).filter(node=>flowActivity(lic, node.id))
+  ];
 }
 
 function renderActivities(lic){
+  const steps = flowStepOptions(lic);
   const rows = lic.activities.map((a,i)=>{
     const overdue = a.date && daysUntil(a.date)<0 && a.status!=='Done';
+    const linked = steps.some(node=>node.id === a.etapaPadraoId);
+    const stepCell = steps.length ? `<td><select data-af="etapaPadraoId" class="act-step" aria-label="Etapa do fluxo">
+        <option value="" ${linked ? '' : 'selected'}>— sem etapa —</option>
+        ${steps.map(node=>`<option value="${esc(node.id)}" ${node.id === a.etapaPadraoId ? 'selected' : ''}>${esc(node.nome)}</option>`).join('')}
+      </select></td>` : '';
     return `
     <tr data-lic="${esc(lic.id)}" data-idx="${i}">
-      <td><input data-af="name" value="${esc(a.name)}"></td>
+      <td><input data-af="name" value="${esc(a.name)}"></td>${stepCell}
       <td><input data-af="owner" value="${esc(a.owner||'')}" placeholder="responsável"></td>
       <td>
         <select data-af="status" class="act-status ${actStatusClass(a.status)}">
@@ -1111,7 +1222,9 @@ function renderActivities(lic){
     <button class="btn" style="padding:5px 10px;font-size:12px;" data-add-act="${esc(lic.id)}">+ Adicionar atividade</button>
   </div>
   <table class="act-table">
-    <thead><tr><th style="width:24%">Atividade</th><th style="width:16%">Responsável</th><th style="width:16%">Status</th><th style="width:13%">Data</th><th style="width:25%">Observação</th><th></th></tr></thead>
+    <thead><tr>${steps.length
+      ? '<th style="width:22%">Atividade</th><th style="width:18%">Etapa do fluxo</th><th style="width:13%">Responsável</th><th style="width:13%">Status</th><th style="width:11%">Data</th><th style="width:20%">Observação</th>'
+      : '<th style="width:24%">Atividade</th><th style="width:16%">Responsável</th><th style="width:16%">Status</th><th style="width:13%">Data</th><th style="width:25%">Observação</th>'}<th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -1120,18 +1233,17 @@ function renderFlow(lic){
   const flow = walkFlow(lic);
   if(!flow){
     const suggested = suggestedFlowType(lic);
+    const spec = spreadsheetFlowFor(lic);
     return `<section class="flow-section"><div class="section-label">Fluxo do processo</div>
-      <p class="flow-help">Esta licença ainda não segue o fluxograma. Aplicar o fluxo acrescenta as etapas e mantém as atividades atuais.</p>
+      <p class="flow-help">Esta licença ainda não segue o fluxograma. ${spec
+        ? `Aplicar o fluxo de Licenças importa as ${spec.etapas.length} atividades da planilha da unidade, cada uma ligada a uma etapa do fluxograma, e mantém as atividades atuais.`
+        : 'Aplicar o fluxo acrescenta as etapas e mantém as atividades atuais.'}</p>
       <div class="flow-apply"><select data-flow-type aria-label="Fluxo do processo">
         ${Object.entries(PROCESS_FLOWS).map(([key, def])=>`<option value="${esc(key)}" ${key===suggested?'selected':''}>${esc(def.nome)}</option>`).join('')}
       </select><button class="btn btn-primary" data-flow-apply="${esc(lic.id)}">Aplicar fluxo</button></div>
     </section>`;
   }
-  const {def, items, current, fim} = flow;
-  const steps = items.map(({node, option, state})=>{
-    const label = node.decisao ? `${node.decisao}${option ? ` → ${option.rotulo}` : ''}` : node.nome;
-    return `<li class="flow-step flow-${state} ${node.decisao ? 'flow-gate' : ''}"><span>${esc(label)}</span>${node.area ? `<small>${esc(node.area)}</small>` : ''}</li>`;
-  }).join('');
+  const {def, current, fim} = flow;
   let action;
   if(fim){
     action = `<div class="flow-current flow-finished"><div class="flow-kicker">Fluxo concluído</div><strong>${esc(fim)}</strong>
@@ -1141,14 +1253,19 @@ function renderFlow(lic){
     action = `<div class="flow-current"><div class="flow-kicker">Decisão</div><strong>${esc(current.node.decisao)}</strong>
       <div class="unit-actions">${current.node.opcoes.map(option=>`<button class="btn" data-flow-decide="${esc(lic.id)}" data-gate="${esc(current.node.id)}" data-option="${esc(option.id)}">${esc(option.rotulo)}</button>`).join('')}</div></div>`;
   }else{
+    const pending = flowActivities(lic, current.node.id).filter(activity=>!STEP_DONE.includes(activity.status));
     action = `<div class="flow-current"><div class="flow-kicker">Etapa atual${current.node.area ? ` · ${esc(current.node.area)}` : ''}</div>
       <strong>${esc(current.node.nome)}</strong>${current.node.nota ? `<p>${esc(current.node.nota)}</p>` : ''}
-      <button class="btn btn-primary" data-flow-complete="${esc(lic.id)}" data-step="${esc(current.node.id)}">Concluir etapa</button></div>`;
+      ${pending.length ? `<p>Atividades pendentes desta etapa:</p><ul class="flow-pending">${pending.map(activity=>`<li>${esc(activity.name)}${activity.owner ? ` <small>· ${esc(activity.owner)}</small>` : ''}</li>`).join('')}</ul>` : ''}
+      <button class="btn btn-primary" data-flow-complete="${esc(lic.id)}" data-step="${esc(current.node.id)}" data-count="${pending.length}">${pending.length > 1 ? `Concluir as ${pending.length} atividades da etapa` : 'Concluir etapa'}</button></div>`;
   }
+  const importable = def === PROCESS_FLOWS.licenca && !lic.fluxo.planilhaImportada && spreadsheetFlowFor(lic);
   const history = [...(lic.fluxo.historico || [])].reverse();
   return `<section class="flow-section"><div class="section-label">Fluxo · ${esc(def.nome)} · ciclo ${esc(lic.fluxo.ciclo || 1)}</div>
+    ${importable ? `<div class="flow-import"><p class="flow-help">A planilha da unidade tem ${importable.etapas.length} atividades para esta licença. Importar liga cada uma a uma etapa do fluxograma e substitui as etapas genéricas ainda não iniciadas.</p>
+      <button class="btn" data-flow-import="${esc(lic.id)}">Importar atividades da planilha</button></div>` : ''}
     ${action}
-    <ol class="flow-steps">${steps}</ol>
+    ${renderFlowDiagram(lic, flow)}
     ${history.length ? `<details class="standard-flow"><summary>Histórico do fluxo (${history.length})</summary><ul>${history.map(entry=>`<li>${esc(fmtDate(entry.data))} · ciclo ${esc(entry.ciclo)} · ${esc(entry.texto)}</li>`).join('')}</ul></details>` : ''}
   </section>`;
 }
@@ -1315,8 +1432,8 @@ function attachCardEvents(){
         activity[el.dataset.af] = el.value;
         if(el.dataset.af === 'status'){
           activity.dataRealizada = STEP_DONE.includes(el.value) ? (activity.dataRealizada || todayStr()) : '';
-          syncFlowStatus(lic, before);
         }
+        if(['status', 'etapaPadraoId'].includes(el.dataset.af)) syncFlowStatus(lic, before);
         saveData();
         render();
       });
@@ -1345,7 +1462,12 @@ function attachCardEvents(){
     void runFlowAction(btn.dataset.flowApply, lic=>applyFlow(lic, type), 'Fluxo aplicado');
   }));
   document.querySelectorAll('[data-flow-complete]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const count = Number(btn.dataset.count);
+    if(count > 1 && !confirm(`Marcar as ${count} atividades pendentes desta etapa como concluídas?`)) return;
     void runFlowAction(btn.dataset.flowComplete, lic=>completeFlowStep(lic, btn.dataset.step), 'Etapa concluída');
+  }));
+  document.querySelectorAll('[data-flow-import]').forEach(btn=>btn.addEventListener('click', ()=>{
+    void runFlowAction(btn.dataset.flowImport, importSpreadsheetFlow, 'Atividades da planilha importadas');
   }));
   document.querySelectorAll('[data-flow-decide]').forEach(btn=>btn.addEventListener('click', ()=>{
     void runFlowAction(btn.dataset.flowDecide, lic=>decideFlow(lic, btn.dataset.gate, btn.dataset.option), 'Decisão registrada');
