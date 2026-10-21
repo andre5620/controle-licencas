@@ -65,6 +65,9 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
         value: '', textContent: '', hidden: false, disabled: false, style: {},
         listeners: {}, classList: {add(){}, remove(){}},
         querySelectorAll: ()=>[],
+        append(...nodes){ this.children = nodes; },
+        attributes: {}, setAttribute(name, value){ this.attributes[name] = value; },
+        removeAttribute(name){ delete this.attributes[name]; }, focus(){},
         addEventListener(name, callback){ this.listeners[name] = callback; }
       });
     }
@@ -84,7 +87,8 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
   const context = vm.createContext({
     window, document: {
       getElementById: element, querySelector: selector=>selector === 'main' ? element('main') : null,
-      querySelectorAll: ()=>[], activeElement: null, hidden: false
+      querySelectorAll: ()=>[], activeElement: null, hidden: false, addEventListener(){},
+      createElement: ()=>({listeners: {}, addEventListener(name, callback){ this.listeners[name] = callback; }})
     },
     localStorage: {getItem: key=>storage.get(key) ?? null, setItem: (key, value)=>storage.set(key, value)},
     console: {error: (...args)=>errors.push(args)}, crypto: webcrypto, URL, URLSearchParams,
@@ -94,7 +98,8 @@ function createApp({remote = true, service = {}, storage = new Map(), withCatalo
   if(withFlows) vm.runInContext(readFileSync(join(root, 'data', 'fluxos-processo.js'), 'utf8'), context);
   vm.runInContext(appSource, context);
   const run = code=>vm.runInContext(code, context);
-  run("render = ()=>{}; authenticatedUserId = 'user-1';");
+  /* O modal de confirmação depende do DOM real; nos testes ele delega ao confirm() simulado. */
+  run("render = ()=>{}; authenticatedUserId = 'user-1'; askConfirm = async options=>confirm(options.message);");
   return {run, element, storage, errors, context};
 }
 
@@ -475,10 +480,14 @@ test('nova licenca exige unidade e usa cidade e UF oficiais mesmo se formulario 
   const app = createApp();
   await app.run('loadData()');
   app.element('nl_id').value = 'NOVA';
+  app.element('nl_tipo').value = 'LO';
+  app.element('nl_orgao').value = 'Órgão';
+  app.element('nl_status').value = 'Pendente';
   const save = ()=>app.element('btnSaveNewLic').listeners.click();
   await save();
   assert.equal(app.run('DATA.length'), 0);
-  assert.match(app.element('toast').textContent, /Selecione/);
+  assert.match(app.element('newLicError').textContent, /Selecione uma unidade/);
+  assert.equal(app.element('nl_unidade').attributes['aria-invalid'], 'true');
   app.run("MODEL.units.push({id:'U-1',nome:'Oficial',cidade:'Sinop',uf:'MT'});");
   app.element('nl_unidade').value = 'U-1';
   app.element('nl_unidade').listeners.change();
@@ -704,7 +713,7 @@ test('unidade inicial excluida nao reaparece apos salvar e recarregar', async ()
   assert.equal(await app.run("deleteUnit(MODEL.units.find(u=>u.nome === 'Fábrica').id)"), true);
   assert.equal(app.run('MODEL.units.length'), 7);
   assert.equal(app.element('fUnidade').value, '');
-  assert.equal(app.run('window.location.hash'), '#units');
+  assert.equal(app.run('window.location.hash'), '#view=unidades');
   const next = createApp({withCatalog:true, service:{
     load: async ()=>({model:structuredClone(stored),revision:3,organizationId:'org-1'})
   }});
@@ -1033,6 +1042,285 @@ test('diagrama em raias mostra contadores e a pagina da unidade exibe o fluxo da
   assert.match(app.element('unitPanel').innerHTML, /licença L-012 importa as 20 atividades da planilha/);
   app.run("renderUnitDetail(unitId('NY Tower'));");
   assert.match(app.element('unitPanel').innerHTML, /Nenhuma licença desta unidade segue o fluxograma/);
+});
+
+test('lista por urgencia separa o que requer acao e ordena vencidas primeiro', ()=>{
+  const app = createApp();
+  app.run(`var day = n=>addDaysIso(todayStr(), n);
+    var list = [
+      {id:'L-001', status:'Obtida', risco:'Baixo', vencimento: day(900)},
+      {id:'L-002', status:'Obtida', risco:'Baixo', vencimento: day(-10)},
+      {id:'L-003', status:'Pendente', risco:'Alto'},
+      {id:'L-004', status:'Obtida', risco:'Baixo', vencimento: day(-200)},
+      {id:'L-005', status:'Obtida', risco:'Baixo', vencimento: day(30)},
+      {id:'L-006', status:'Obtida', risco:'Alto'},
+      {id:'L-007', status:'Obtida', risco:'Baixo', vencimento: day(300)}
+    ];
+    var groups = groupByUrgency(list);`);
+  assert.equal(app.run("groups.acao.map(l=>l.id).join()"), 'L-004,L-002,L-005,L-003');
+  assert.equal(app.run("groups.demais.map(l=>l.id).join()"), 'L-007,L-001,L-006');
+  assert.equal(app.run("sortLicenses(list, 'id').map(l=>l.id).join()"), 'L-001,L-002,L-003,L-004,L-005,L-006,L-007');
+  assert.equal(app.run("needsAction({id:'X', status:'Pendente', risco:'Baixo', vencimento: day(130), antecedenciaDias: 150})"), true);
+});
+
+test('painel de unidades ordena pela quantidade de licencas que requerem acao', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-A',nome:'Alfa',cidade:'C',uf:'SP'},{id:'U-B',nome:'Beta',cidade:'C',uf:'SP'});
+    renderUnitPanel([
+      {id:'L-1', unidadeId:'U-A', status:'Obtida', risco:'Baixo', activities:[]},
+      {id:'L-2', unidadeId:'U-B', status:'Pendente', risco:'Alto', activities:[]}
+    ]);`);
+  const html = app.element('unitPanel').innerHTML;
+  assert.ok(html.indexOf('Beta') < html.indexOf('Alfa'));
+  assert.match(html, /1 requer ação/);
+});
+
+test('filtro rapido dos KPIs combina com os selects e nao altera seus valores', ()=>{
+  const app = createApp();
+  app.run(`DATA = [
+    {id:'L-1', unidade:'A', status:'Obtida', risco:'Alto', vencimento: addDaysIso(todayStr(), -5)},
+    {id:'L-2', unidade:'A', status:'Pendente', risco:'Baixo'},
+    {id:'L-3', unidade:'B', status:'Obtida', risco:'Baixo', vencimento: addDaysIso(todayStr(), -1)}
+  ];`);
+  app.run("quickFilter = 'vencidas';");
+  assert.equal(app.run('getFiltered().map(l=>l.id).join()'), 'L-1,L-3');
+  assert.equal(app.run('getFiltered({ignoreQuick: true}).length'), 3);
+  app.element('fUnidade').value = 'A';
+  assert.equal(app.run('getFiltered().map(l=>l.id).join()'), 'L-1');
+  assert.equal(app.element('fStatus').value, '');
+  app.run("renderKPIs(getFiltered({ignoreQuick: true}));");
+  assert.match(app.element('kpiRow').innerHTML, /data-kpi="vencidas" aria-pressed="true"/);
+  assert.match(app.element('kpiRow').innerHTML, /data-kpi="obtidas" aria-pressed="false"/);
+  app.element('btnClearFilters').listeners.click();
+  assert.equal(app.run('quickFilter'), null);
+});
+
+test('KPIs da pagina da unidade filtram as licencas da unidade', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-1',nome:'Unidade',cidade:'C',uf:'SP'});
+    DATA = [{id:'L-VENC', unidadeId:'U-1', unidade:'Unidade', status:'Obtida', vencimento: addDaysIso(todayStr(), -3), activities:[]},
+      {id:'L-OK', unidadeId:'U-1', unidade:'Unidade', status:'Obtida', activities:[]}];
+    unitQuickFilter = {unitId:'U-1', key:'vencidas'}; renderUnitDetail('U-1');`);
+  const html = app.element('unitPanel').innerHTML;
+  assert.match(html, /data-id="L-VENC"/);
+  assert.doesNotMatch(html, /data-id="L-OK"/);
+  assert.match(html, /1 de 2/);
+});
+
+test('card da licenca abre em leitura e so altera a licenca ao salvar a edicao', async ()=>{
+  const requests = [];
+  const app = createApp({service: {save: async (model, revision)=>{ requests.push(model); return revision + 1; }}});
+  await app.run('loadData()');
+  app.run(`MODEL = modelFromLegacyData([{...window.DEFAULT_DATA[0], vencimento:'2027-03-05', notes:'<b>nota</b>'}]);
+    DATA = flattenModel(MODEL);`);
+  const read = app.run('renderFields(DATA[0])');
+  assert.doesNotMatch(read, /<input|<select|<textarea/);
+  assert.match(read, /05\/03\/2027/);
+  assert.match(read, /Editar licença/);
+  assert.match(read, /&lt;b&gt;nota/);
+  await app.run("startLicenseEdit(DATA[0].id)");
+  const editing = app.run('renderFields(DATA[0])');
+  assert.match(editing, /<label for="ed_L-1_orgaoEmissor">/);
+  assert.match(editing, /Salvar/);
+  app.run("licenseEditor.draft.orgaoEmissor = 'Novo órgão'; licenseEditor.dirty = true;");
+  app.run('cancelLicenseEdit()');
+  assert.equal(app.run('DATA[0].orgaoEmissor'), 'Orgao');
+  await app.run("startLicenseEdit(DATA[0].id)");
+  app.run("licenseEditor.draft.orgaoEmissor = 'Novo órgão'; licenseEditor.dirty = true;");
+  assert.equal(requests.length, 0);
+  assert.equal(await app.run('saveLicenseEdit()'), true);
+  assert.equal(app.run('DATA[0].orgaoEmissor'), 'Novo órgão');
+  assert.equal(app.run('licenseEditor'), null);
+  assert.equal(requests.at(-1).processes[0].orgaoEmissor, 'Novo órgão');
+});
+
+test('trocar de card com rascunho pede confirmacao e o perfil da unidade nao e editavel na licenca', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run("licenseEditor = {id:'L-A', draft:{notes:'x'}, dirty:true};");
+  app.context.confirm = ()=>false;
+  assert.equal(await app.run("startLicenseEdit('L-B')"), false);
+  assert.equal(app.run('licenseEditor.id'), 'L-A');
+  const profile = app.run(`renderUnitProfile({unidadeId:'U 1', perfilUnidade:{razaoSocial:'Empresa', cnpj:'00', area:'10 m²', extintores:'3'}})`);
+  assert.match(profile, /Empresa/);
+  assert.match(profile, /href="#unit=U%201"/);
+  assert.doesNotMatch(profile, /<input|extintores|3<\/span>/i);
+});
+
+test('abas refletem a visao no hash e aceitam os enderecos antigos e a pagina da unidade', ()=>{
+  const app = createApp();
+  const route = hash=>app.run(`navigatePanel(${JSON.stringify(hash)}); [activePanel, activeView, currentViewKey()].join()`);
+  assert.equal(route('#view=gantt'), 'license,gantt,gantt');
+  assert.equal(route('#view=licencas'), 'license,list,licencas');
+  assert.equal(route('#view=calendario'), 'calendar,list,calendario');
+  assert.equal(route('#view=unidades'), 'unit,list,unidades');
+  assert.equal(route('#licenses'), 'license,list,licencas');
+  assert.equal(route('#calendar'), 'calendar,list,calendario');
+  assert.equal(route('#unit=U-1'), 'unit,list,unidades');
+  assert.equal(app.run('currentUnitId()'), 'U-1');
+  app.run("navigatePanel('#view=gantt');");
+  assert.equal(route(''), 'license,gantt,gantt');
+  assert.equal(route('#view=invalida'), 'license,gantt,gantt');
+});
+
+test('estados vazios oferecem a acao direta: aplicar fluxo, vincular comprovante e criar licenca', async ()=>{
+  const app = await sheetApp();
+  app.run("addLicense('L-012', 'Balsas'); addLicense('L-020', 'Balsas', 'Outorga de Água'); renderUnitDetail(unitId('Balsas'));");
+  const html = app.element('unitPanel').innerHTML;
+  assert.match(html, /data-flow-apply-direct="L-012" data-flow-type="licenca">Aplicar fluxo de Licenças na L-012/);
+  assert.match(html, /data-flow-type="outorga">Aplicar fluxo de Outorgas na L-020/);
+  assert.match(html, /licença L-012 importa as 20 atividades da planilha/);
+  assert.match(html, /Cole o link de um arquivo ou pasta do OneDrive/);
+  app.run("renderUnitDetail(unitId('NY Tower'));");
+  const empty = app.element('unitPanel').innerHTML;
+  assert.doesNotMatch(empty, /data-flow-apply-direct/);
+  assert.match(empty, /\+ Criar primeira licença/);
+  assert.equal(await app.run("runFlowAction('L-012', lic=>applyFlow(lic, 'licenca'), 'Fluxo aplicado')"), true);
+  assert.equal(app.run("DATA.find(l=>l.id === 'L-012').fluxo.tipo"), 'licenca');
+});
+
+test('prazos de vencimento aparecem em linguagem humana com a data exata no title', ()=>{
+  const app = createApp();
+  const badge = days=>app.run(`vencimentoBadge(addDaysIso(todayStr(), ${days}))`);
+  const text = days=>badge(days).txt;
+  assert.equal(text(0), 'Vence hoje');
+  assert.equal(text(1), 'Vence amanhã');
+  assert.equal(text(45), 'Vence em 45 dias');
+  assert.equal(text(60), 'Vence em 60 dias');
+  assert.equal(text(243), 'Vence em ~8 meses');
+  assert.equal(text(800), 'Vence em ~2 anos');
+  assert.equal(text(-1), 'Venceu ontem');
+  assert.equal(text(-30), 'Vencida há 30 dias');
+  assert.equal(text(-122), 'Vencida há ~4 meses');
+  assert.equal(badge(-5).cls, 'b-venc-vencido');
+  assert.equal(badge(100).cls, 'b-venc-alerta');
+  assert.equal(badge(200).cls, 'b-venc-ok');
+  assert.equal(app.run("vencimentoBadge('2027-03-05').title"), 'Vencimento: 05/03/2027');
+});
+
+test('faixa de sincronizacao aparece com pendencias, fica vermelha no erro e some ao sincronizar', async ()=>{
+  let fail = true;
+  const app = createApp({service: {save: async (_model, revision)=>{
+    if(fail) throw new Error('Offline');
+    return revision + 1;
+  }}});
+  await app.run('loadData()');
+  await app.run('saveData()');
+  assert.equal(app.element('syncBanner').hidden, false);
+  assert.equal(app.element('btnSyncNow').hidden, false);
+  assert.equal(app.element('btnSyncNow').textContent, 'Tentar novamente');
+  assert.match(app.element('syncMessage').textContent, /Offline.*ainda não estão disponíveis para a equipe/);
+  assert.equal(app.run('syncBannerAction'), 'btnSync');
+  fail = false;
+  await app.run('saveData()');
+  assert.equal(app.element('syncBanner').hidden, true);
+  app.run("conflict = true; reportSyncError({code: '40001', message: 'Conflito'});");
+  assert.equal(app.element('btnSyncNow').textContent, 'Carregar servidor');
+  assert.equal(app.run('syncBannerAction'), 'btnReloadServer');
+  app.run("conflict = false; setSaveState('var(--amber)', 'alterações pendentes', '', 'pending');");
+  assert.equal(app.element('syncMessage').textContent, 'Você tem alterações que ainda não estão disponíveis para a equipe.');
+  assert.equal(app.element('btnSyncNow').textContent, 'Sincronizar agora');
+});
+
+test('modo local mostra a faixa de dados so neste navegador sem botao de sincronizar', async ()=>{
+  const app = createApp({remote: false});
+  await app.run('loadData()');
+  assert.equal(app.element('syncBanner').hidden, false);
+  assert.match(app.element('syncMessage').textContent, /só neste navegador/);
+  assert.equal(app.element('btnSyncNow').hidden, true);
+});
+
+test('remover comprovante vale na hora, adia a gravacao e pode ser desfeito', async ()=>{
+  const requests = [];
+  const app = createApp({service: {save: async (model, revision)=>{ requests.push(structuredClone(model)); return revision + 1; }}});
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-1',nome:'Teste',cidade:'C',uf:'SP',
+    evidenceLinks:[{name:'A',url:'https://1drv.ms/f/a'},{name:'B',url:'https://1drv.ms/f/b'}]});`);
+  const undo = ()=>app.element('toast').children[1].listeners.click();
+  assert.equal(app.run("removeEvidenceLink('unit', 'U-1', 0)"), true);
+  assert.equal(app.run('MODEL.units[0].evidenceLinks.map(l=>l.name).join()'), 'B');
+  assert.equal(requests.length, 0);
+  assert.match(app.element('toast').textContent, /removido/);
+  assert.equal(app.element('toast').children[1].textContent, 'Desfazer');
+  undo();
+  assert.equal(app.run('MODEL.units[0].evidenceLinks.map(l=>l.name).join()'), 'A,B');
+  assert.equal(requests.length, 0);
+  app.run("removeEvidenceLink('unit', 'U-1', 1)");
+  await app.run('commitPendingUndo()');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].units[0].evidenceLinks.length, 1);
+  app.run("removeEvidenceLink('unit', 'U-1', 0)");
+  await app.run('saveData()');
+  assert.equal(requests.length, 2);
+  undo();
+  await app.run('saveQueue');
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].units[0].evidenceLinks[0].name, 'A');
+});
+
+test('concluir etapa pode ser desfeito e restaura as atividades', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`DATA = [${JSON.stringify({id: 'L-F', categoria: 'Ambiental', tipoLicenca: 'LO', status: 'Pendente', activities: []})}];
+    applyFlow(DATA[0], 'licenca');`);
+  const step = app.run('currentFlowNodeId(DATA[0])');
+  assert.equal(app.run(`completeFlowStepUndoable('L-F', ${JSON.stringify(step)}, 1)`), true);
+  assert.notEqual(app.run('currentFlowNodeId(DATA[0])'), step);
+  app.element('toast').children[1].listeners.click();
+  assert.equal(app.run('currentFlowNodeId(DATA[0])'), step);
+  assert.equal(app.run(`completeFlowStepUndoable('L-F', 'ETAPA-ERRADA', 1)`), false);
+  assert.match(app.element('toast').textContent, /não é mais a etapa atual/);
+});
+
+test('nova licenca gera o proximo ID e valida os obrigatorios sem alert', async ()=>{
+  const app = createApp({withFlows: true});
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-1',nome:'Oficial',cidade:'Sinop',uf:'MT'});
+    DATA = [{id:'L-009'},{id:'L-013'},{id:'X-99'}];`);
+  assert.equal(app.run('nextLicenseId()'), 'L-014');
+  app.run("DATA = []; openNewLicense('U-1');");
+  assert.equal(app.element('nl_id').value, 'L-001');
+  assert.equal(app.element('nl_id').readOnly, true);
+  app.element('nl_tipo').value = '';
+  app.element('nl_orgao').value = ' ';
+  app.element('nl_status').value = 'Pendente';
+  await app.element('btnSaveNewLic').listeners.click();
+  assert.equal(app.run('DATA.length'), 0);
+  assert.equal(app.element('newLicError').hidden, false);
+  assert.match(app.element('newLicError').textContent, /tipo de licença.*órgão emissor/);
+  assert.equal(app.element('nl_tipo').attributes['aria-invalid'], 'true');
+  assert.equal(app.element('nl_unidade').attributes['aria-invalid'], undefined);
+  app.element('nl_tipo').value = 'LO';
+  app.element('nl_orgao').value = 'SEMA';
+  await app.element('btnSaveNewLic').listeners.click();
+  assert.equal(app.run('DATA[0].id'), 'L-001');
+  assert.equal(app.element('newLicError').hidden, true);
+  app.run("openNewLicense('U-1');");
+  app.element('btnEditNewLicId').listeners.click();
+  assert.equal(app.element('nl_id').readOnly, false);
+  app.element('nl_id').value = 'L-001';
+  app.element('nl_tipo').value = 'LO';
+  app.element('nl_orgao').value = 'SEMA';
+  await app.element('btnSaveNewLic').listeners.click();
+  assert.match(app.element('newLicError').textContent, /Já existe uma licença com o ID L-001/);
+});
+
+test('obrigacoes ambientais aparecem em tabela com status e prazo da licenca correspondente', async ()=>{
+  const app = createApp();
+  await app.run('loadData()');
+  app.run(`MODEL.units.push({id:'U-1',nome:'Fábrica',cidade:'C',uf:'SP',environmentalLicenses:[
+      {tema:'Licenciamento', orgao:'CETESB', tipo:'Licença de Operação - LO', numero:'123', motivacao:'Obrigatoriedade'},
+      {orgao:'SEMA MT', tipo:'Ofício de dispensa', numero:'', motivacao:'Dispensada'},
+      {orgao:'<b>X</b>', tipo:'Outra'}]});
+    DATA = [{id:'L-1', unidadeId:'U-1', unidade:'Fábrica', orgaoEmissor:'Cetesb', tipoLicenca:'Licença de Operação', status:'Obtida', vencimento:'2028-01-31', activities:[]}];
+    renderUnitDetail('U-1');`);
+  const html = app.element('unitPanel').innerHTML;
+  assert.match(html, /class="obligations-table"/);
+  assert.match(html, /<span class="badge b-obtida">Obtida<\/span><\/td>\s*<td data-label="Prazo">31\/01\/2028/);
+  assert.match(html, /b-dispensada">Dispensada/);
+  assert.match(html, /data-label="Nº\/Processo">—/);
+  assert.match(html, /&lt;b&gt;X&lt;\/b&gt;/);
 });
 
 test('controle de etapas das unidades nao publica nomes de pessoas', ()=>{

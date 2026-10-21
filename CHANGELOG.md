@@ -2,6 +2,31 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.13.0] - 2026-10-21
+
+### Melhorias de usabilidade
+
+- Lista de licenças ordenada por urgência, com os grupos "Requer ação" (vencidas, dentro da janela de renovação ou risco alto em aberto) e "Demais licenças"; seletor de ordenação por urgência, vencimento, ID ou unidade.
+- Cards de unidade ordenados pelas pendências críticas, com o selo "X requerem ação".
+- Indicadores clicáveis como filtros rápidos, combináveis com os filtros existentes, no painel e na página da unidade.
+- Card da licença em modo leitura; os campos só abrem em "Editar licença", com Salvar/Cancelar, `Esc` e `Ctrl+Enter`, uma licença por vez e aviso antes de descartar alterações.
+- Perfil da unidade resumido dentro da licença, com link para a página da unidade, onde é exibido em modo leitura.
+- Cabeçalho reorganizado: Nova licença, Nova unidade e Exportar visíveis; Sincronizar, Carregar servidor, Importar dados locais, Restaurar dados e Sair no menu "⋯ Mais", com navegação por teclado.
+- Seletor único de visão em abas (Unidades · Licenças · Calendário · Gantt), refletido no endereço (`#view=...`) e compatível com `#unit=ID` e os endereços antigos.
+- Estados vazios com ação direta: aplicar o fluxo sugerido na licença, ajuda para vincular comprovantes e "+ Criar primeira licença".
+- Prazos em linguagem humana ("Vence em ~8 meses", "Vencida há 30 dias"), com a data exata no tooltip.
+- Faixa de sincronização abaixo do cabeçalho com "Sincronizar agora", vermelha em caso de erro ("Tentar novamente" ou "Carregar servidor" em conflito).
+- "Desfazer" por 8 segundos ao remover vínculo de comprovante e ao concluir uma etapa; confirmações das ações destrutivas em janela própria, com o botão repetindo a ação.
+- Nova licença com ID automático, campos obrigatórios marcados, validação no próprio formulário e seções; foco automático e retorno do foco em todos os modais.
+- Obrigações ambientais em tabela compacta (obrigação, órgão, número, status e prazo), em cartões no celular.
+- Layout de celular: cabeçalho compacto, indicadores em faixa rolável, filtros recolhidos em "Filtros (n)" e botão flutuante para nova licença, sem rolagem horizontal da página.
+
+### Correções
+
+- Inclusão da meta `viewport`, sem a qual os celulares exibiam o painel em largura de desktop.
+- Mês do calendário com apenas a primeira letra maiúscula ("Outubro de 2026").
+- Contraste AA nas mensagens de erro.
+
 ## [1.12.0] - 2026-10-19
 
 ### Atividades da planilha ligadas ao fluxograma

@@ -32,13 +32,32 @@ Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e d
 
 **Fluxo da unidade:** a pagina da unidade mostra o diagrama do fluxograma de cada licenca da unidade que segue um fluxo. O diagrama e dividido em raias (Sustentabilidade, Areas internas, Fiscal) e indica, em cada etapa, quantas atividades ja foram concluidas. O controle de etapas da aba de cada unidade na planilha vira atividades da licenca (veja "Fluxo do processo").
 
-Use o seletor **Por licença** para acompanhar cada processo individualmente ou **Por unidade** para consultar o perfil do local, suas obrigações e todos os processos relacionados.
+### Navegacao
+
+- **Abas de visao:** logo abaixo do cabecalho ficam as abas **Unidades · Licencas · Calendario · Gantt** (setas do teclado trocam de aba). A aba aparece no endereco (`#view=unidades`, `#view=licencas`, `#view=calendario`, `#view=gantt`), funciona com Voltar/Avancar e pode ser compartilhada. Os enderecos antigos `#units`, `#licenses` e `#calendar` continuam aceitos. Sem aba no endereco, o painel abre na ultima aba usada neste navegador (apenas preferencia de interface).
+- **Requer acao:** na aba Licencas, com a ordem padrao **Urgencia**, a lista e dividida em "Requer acao" (vencidas, dentro da janela de renovacao ou risco alto em aberto) e "Demais licencas". As vencidas aparecem primeiro, da mais atrasada para a menos. O seletor **Ordenar** tambem oferece Vencimento, ID e Unidade, sem agrupamento.
+- **Unidades:** os cards sao ordenados pela unidade com mais licencas que requerem acao e mostram o selo "X requerem acao".
+- **Indicadores clicaveis:** clicar em um indicador (Obtidas, Pendentes, Vencidas, Risco alto) filtra a lista de licencas; clicar de novo, em "Licencas no escopo" ou em **Limpar filtros** remove o filtro. Ele se combina com os filtros de unidade, status, risco e busca. Na pagina da unidade, os indicadores filtram "Licencas da unidade".
+- **Prazos:** os selos mostram o prazo em linguagem humana ("Vence em 45 dias", "Vence em ~8 meses", "Vencida ha ~4 meses"); a data exata aparece ao passar o mouse.
+- **Cabecalho:** ficam visiveis **+ Nova licenca**, **+ Nova unidade**, **Exportar relatorio** e o indicador de sincronizacao. **Sincronizar**, **Carregar servidor**, **Importar dados locais**, **Restaurar dados** e **Sair** ficam no menu **⋯ Mais**.
+- **Faixa de sincronizacao:** com alteracoes pendentes, uma faixa abaixo do cabecalho avisa que elas ainda nao estao disponiveis para a equipe e oferece **Sincronizar agora**. Em caso de erro, a faixa fica vermelha com **Tentar novamente** (ou **Carregar servidor**, em conflito). No modo local, a faixa informa que os dados ficam so neste navegador.
+- **Celular (ate 640px):** cabecalho compacto com as acoes no menu **⋯ Mais**, indicadores em faixa com rolagem lateral, filtros recolhidos em **Filtros (n)** e **+ Nova licenca** como botao flutuante.
+
+### Edicao das licencas
+
+Ao expandir uma licenca, os dados aparecem em modo leitura. Clique em **Editar licenca** para alterar; as mudancas so valem ao clicar em **Salvar** (ou `Ctrl+Enter`). **Cancelar** (ou `Esc`) descarta. Apenas uma licenca fica em edicao por vez, e o painel pede confirmacao antes de descartar alteracoes nao salvas. A tabela de atividades continua editavel diretamente.
+
+Dentro da licenca, o perfil da unidade aparece resumido, com o link **Ver/editar perfil da unidade →**. O perfil so e editado na pagina da unidade.
+
+No formulario **+ Nova licenca**, o ID e gerado automaticamente (proximo `L-NNN` livre) e pode ser alterado em **alterar**. Unidade, tipo de licenca, orgao emissor e status sao obrigatorios; os erros aparecem no proprio formulario.
+
+**Desfazer e confirmacoes:** remover um vinculo de comprovante e concluir as atividades de uma etapa valem na hora e mostram um aviso com **Desfazer** por 8 segundos; a gravacao acontece quando o aviso expira (ou antes, se outra alteracao for gravada, ao sincronizar, sair ou fechar a pagina). Exclusoes e acoes que afetam toda a base (novo ciclo, restaurar, importar, descartar pendencias) continuam pedindo confirmacao, em uma janela do proprio painel.
 
 ### Cadastro de unidades
 
-O painel abre em **Por unidade**. O cadastro e independente das licencas: unidades sem processos tambem aparecem, com a opcao de criar a primeira licenca.
+O painel abre na aba **Unidades**. O cadastro e independente das licencas: unidades sem processos tambem aparecem, com a opcao de criar a primeira licenca.
 
-Os cards exibem um resumo. Use **Abrir unidade** para acessar uma pagina completa com perfil, indicadores, comprovantes do OneDrive, obrigacoes ambientais, fluxo da unidade (diagrama) e todas as licencas da unidade. Edicao de perfil, criacao de licenca e edicao de atividades continuam disponiveis nessa pagina.
+Os cards exibem um resumo. Use **Abrir unidade** para acessar uma pagina completa com perfil (em modo leitura), indicadores, comprovantes do OneDrive, obrigacoes ambientais (tabela com obrigacao, orgao, numero, status e prazo), fluxo da unidade (diagrama) e todas as licencas da unidade. Status e prazo de uma obrigacao vem da licenca da unidade com o mesmo orgao e tipo; dispensas sem licenca correspondente aparecem como *Dispensada*. Quando nenhuma licenca segue o fluxograma, a pagina oferece botoes **Aplicar fluxo de Licencas/Outorgas na L-0XX**; unidades sem licencas mostram **+ Criar primeira licenca**. Edicao de perfil, criacao de licenca e edicao de atividades continuam disponiveis nessa pagina.
 
 Na pagina completa, **Excluir unidade** remove o cadastro apos confirmacao, somente se nao houver licencas vinculadas (independentemente dos filtros). Remova ou transfira as licencas antes de excluir. A exclusao afeta todos os colaboradores e remove perfil, obrigacoes e vinculos de comprovantes da unidade, mas nunca apaga arquivos do OneDrive. Unidades do catalogo inicial excluidas nao sao recriadas ao recarregar; **Restaurar dados** pode restaura-las. Em caso de falha de rede, a exclusao fica pendente neste navegador e pode ser reenviada por **Sincronizar**; conflitos continuam protegidos pelo controle de versao.
 
@@ -50,11 +69,11 @@ O catalogo inicial de `data/fluxo.js` contem oito unidades: Fabrica, NY Tower, C
 
 Use **+ Nova unidade** para cadastrar nome, cidade e UF e **Editar unidade** no card para corrigir esses campos. Nomes repetidos nao sao aceitos. As licencas vinculadas passam a exibir o novo nome/localidade sem perder o vinculo com o ID da unidade.
 
-Em **Editar unidade**, tambem e possivel alterar o perfil completo: razao social, CNPJ, endereco, atividade ambiental, atividades conduzidas, ocupacao, area, extintores, hidrantes, SPDA e alarme. O perfil completo pode ser consultado no proprio card da visao por unidade. Valores apagados permanecem vazios, sem restaurar os dados da planilha. A edicao preserva campos adicionais e atualiza razao social, CNPJ e endereco nas licencas vinculadas.
+Em **Editar unidade**, tambem e possivel alterar o perfil completo: razao social, CNPJ, endereco, atividade ambiental, atividades conduzidas, ocupacao, area, extintores, hidrantes, SPDA e alarme. O perfil completo pode ser consultado na pagina da unidade. Valores apagados permanecem vazios, sem restaurar os dados da planilha. A edicao preserva campos adicionais e atualiza razao social, CNPJ e endereco nas licencas vinculadas.
 
 ### Comprovantes do OneDrive
 
-Na unidade e no card de cada licenca, use **+ Vincular comprovante**. Informe um nome e cole o link de um arquivo ou pasta existente no OneDrive. Cada registro pode ter varios vinculos independentes, que podem ser editados, abertos em nova aba e removidos. Remover um vinculo NAO exclui o arquivo.
+Na unidade e no card de cada licenca, use **+ Vincular comprovante**. Informe um nome e cole o link de um arquivo ou pasta existente no OneDrive. Cada registro pode ter varios vinculos independentes, que podem ser editados, abertos em nova aba e removidos (com **Desfazer** por 8 segundos). Remover um vinculo NAO exclui o arquivo.
 
 Sao aceitos links HTTPS de `1drv.ms`, `onedrive.live.com` e subdominios corporativos de `sharepoint.com` (OneDrive empresarial). Outros enderecos sao recusados com mensagem de erro. O painel nao faz upload, nao copia arquivos e nao altera permissoes: configure o compartilhamento no OneDrive para as pessoas que precisam consultar os comprovantes. Todos os colaboradores com acesso a base veem os links, mas apenas quem tiver permissao no OneDrive consegue abrir os arquivos. Nao use links com acesso publico se o comprovante for restrito.
 
@@ -74,7 +93,7 @@ Cada licenca pode seguir um dos fluxogramas da Sustentabilidade: **Regulatorio L
   - Licencas que ja seguiam o fluxo mostram **Importar atividades da planilha**.
   - Outorgas e as demais licencas usam as etapas genericas.
 - Uma etapa do fluxograma fica concluida quando todas as suas atividades estao `Done` ou `N/A`. A coluna **Etapa do fluxo** da tabela de atividades permite religar uma atividade a outra etapa.
-- O card mostra a etapa atual, as atividades pendentes dela e o diagrama em raias. Use **Concluir etapa**, que conclui as atividades pendentes da etapa apos confirmacao, ou altere o status de cada atividade na tabela.
+- O card mostra a etapa atual, as atividades pendentes dela e o diagrama em raias. Use **Concluir etapa**, que conclui as atividades pendentes da etapa na hora (com **Desfazer** por 8 segundos), ou altere o status de cada atividade na tabela.
 - Nas decisoes do fluxograma, escolha a resposta pelos botoes. Cada resposta fica registrada no historico do fluxo:
   - **Jurisdicao (Brasil)**: "Nao" encerra o fluxo com status *Nao aplicavel*.
   - **Licenca exigida ou dispensa**: "Exigida" vale para licenca ou certidao de dispensa a requerer ao orgao (caminho completo); "Dispensa sem requerimento" cria a etapa de registro da dispensa e marca a licenca como *Dispensada*.
@@ -165,9 +184,11 @@ Se faltar uma migracao, permissao ou conexao, o painel mostra o erro e nao abre 
 
 Use o endereco publicado para a base compartilhada. Para usar explicitamente o modo local, remova a URL/chave e defina `required: false` na configuracao. Nesse modo o indicador informa **salvo so neste navegador**. A variante em `azure/` e independente e nao foi alterada por esta integracao Supabase.
 
+**Atencao:** `azure/web/` e uma copia antiga do painel (anterior as versoes com Supabase, fluxograma e as melhorias de interface da 1.13.0) e nao recebe as atualizacoes da raiz. O site publicado pelo GitHub Pages usa os arquivos da raiz. O pipeline `azure/pipeline/azure-deploy.yml` publica `azure/web` como esta; atualize essa copia antes de usa-lo.
+
 ## Testes
 
-Com Node.js instalado, execute `node --test test\sync.test.cjs`. Os testes usam um servidor simulado e cobrem o cliente e a persistencia do painel; a migracao SQL deve ser aplicada e validada no projeto Supabase antes do uso em producao.
+Com Node.js instalado, execute `node --test test\sync.test.cjs`. Os testes usam um servidor simulado e cobrem o cliente, a persistencia e as regras de interface (ordenacao por urgencia, filtros rapidos, modo leitura, Desfazer, rotas das abas, validacao da nova licenca); a migracao SQL deve ser aplicada e validada no projeto Supabase antes do uso em producao.
 
 Depois de aplicar a migracao de organizacao unica, execute `supabase/test/default-organization.sql` no SQL Editor. Ele verifica o vinculo de duas contas novas a mesma base, preservacao de vinculos/owners e bloqueio anonimo. O teste usa uma transacao com `rollback`, sem manter contas ou organizacoes de teste. Se ocorrer erro, execute `rollback;` antes de continuar. Valide tambem dois logins reais no painel e que o cadastro publico esta desativado.
 
