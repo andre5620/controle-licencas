@@ -2,8 +2,9 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Controle de Licenças Regulatórias — Solinftec</title>
-<link rel="stylesheet" href="css/styles.css?v=1.12.0">
+<link rel="stylesheet" href="css/styles.css?v=1.13.0">
 </head>
 <body>
 
@@ -23,49 +24,72 @@
         <div class="brand-sub">Solinftec · Governança Ambiental &amp; Regulatória</div>
       </div>
     </div>
-    <div class="header-actions">
-      <span class="today-chip" id="todayChip"></span>
-      <span class="user-chip" id="userChip" hidden></span>
-      <button class="btn btn-ghost" id="btnSignOut" type="button" hidden>Sair</button>
-      <span class="save-state" role="status" aria-live="polite"><span class="save-dot" id="saveDot"></span><span id="saveText">conectando...</span></span>
-      <button class="btn" id="btnSync" hidden disabled>Sincronizar</button>
-      <button class="btn" id="btnReloadServer" hidden disabled>Carregar servidor</button>
-      <button class="btn" id="btnImportLocal" hidden disabled>Importar dados locais</button>
-      <button class="btn" id="btnReset" disabled>Restaurar dados</button>
-      <button class="btn btn-accent" id="btnExport" disabled>Exportar relatório</button>
-      <button class="btn" id="btnNewUnit" disabled>+ Nova unidade</button>
-      <button class="btn btn-primary" id="btnNewLic" disabled>+ Nova licença</button>
+    <div class="header-side">
+      <div class="header-meta">
+        <span class="today-chip" id="todayChip"></span>
+        <span class="user-chip" id="userChip" hidden></span>
+      </div>
+      <div class="header-actions">
+        <span class="save-state" role="status" aria-live="polite"><span class="save-dot" id="saveDot"></span><span id="saveText">conectando...</span></span>
+        <button class="btn" id="btnExport" type="button" disabled>Exportar relatório</button>
+        <button class="btn" id="btnNewUnit" type="button" disabled>+ Nova unidade</button>
+        <button class="btn btn-primary" id="btnNewLic" type="button" disabled>+ Nova licença</button>
+        <div class="menu">
+          <button class="btn" id="btnMore" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu">⋯ Mais</button>
+          <div class="menu-list" id="moreMenu" role="menu" aria-labelledby="btnMore" hidden>
+            <button class="menu-item mobile-only" id="menuNewUnit" type="button" role="menuitem" tabindex="-1" data-proxy="btnNewUnit" disabled>+ Nova unidade</button>
+            <button class="menu-item mobile-only" id="menuExport" type="button" role="menuitem" tabindex="-1" data-proxy="btnExport" disabled>Exportar relatório</button>
+            <div class="menu-divider mobile-only" role="separator"></div>
+            <button class="menu-item" id="btnSync" type="button" role="menuitem" tabindex="-1" hidden disabled>Sincronizar</button>
+            <button class="menu-item" id="btnReloadServer" type="button" role="menuitem" tabindex="-1" hidden disabled>Carregar servidor</button>
+            <button class="menu-item" id="btnImportLocal" type="button" role="menuitem" tabindex="-1" hidden disabled>Importar dados locais</button>
+            <div class="menu-divider" id="moreMenuDivider" role="separator"></div>
+            <button class="menu-item menu-danger" id="btnReset" type="button" role="menuitem" tabindex="-1" disabled>Restaurar dados</button>
+            <button class="menu-item" id="btnSignOut" type="button" role="menuitem" tabindex="-1" hidden>Sair</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </header>
 
-<p class="sync-message" id="syncMessage" role="status" aria-live="polite" hidden></p>
+<div class="sync-banner" id="syncBanner" hidden>
+  <p class="sync-message" id="syncMessage" role="status" aria-live="polite"></p>
+  <button class="btn btn-small" id="btnSyncNow" type="button" hidden>Sincronizar agora</button>
+</div>
 
 <main inert>
+  <div class="view-tabs" id="viewTabs" role="tablist" aria-label="Visualização">
+    <button class="view-tab" id="btnUnitPanel" type="button" role="tab" aria-selected="true" aria-controls="unitPanel">Unidades</button>
+    <button class="view-tab" id="btnLicensePanel" type="button" role="tab" aria-selected="false" aria-controls="licList" tabindex="-1">Licenças</button>
+    <button class="view-tab" id="btnCalendarPanel" type="button" role="tab" aria-selected="false" aria-controls="calendarPanel" tabindex="-1">Calendário</button>
+    <button class="view-tab" id="btnGanttView" type="button" role="tab" aria-selected="false" aria-controls="ganttView" tabindex="-1">Gantt</button>
+  </div>
+
   <div class="kpi-row" id="kpiRow"></div>
 
   <div class="filters" id="dashboardFilters">
-    <select id="fUnidade"><option value="">Todas as unidades</option></select>
-    <select id="fStatus"><option value="">Todos os status</option></select>
-    <select id="fRisco"><option value="">Todos os riscos</option></select>
-    <input type="text" id="fBusca" placeholder="Buscar por ID, tipo, órgão emissor...">
+    <button class="btn filters-toggle" id="btnFilters" type="button" aria-expanded="false" aria-controls="filterFields">Filtros</button>
+    <div class="filter-fields" id="filterFields">
+    <select id="fUnidade" aria-label="Unidade"><option value="">Todas as unidades</option></select>
+    <select id="fStatus" aria-label="Status"><option value="">Todos os status</option></select>
+    <select id="fRisco" aria-label="Risco"><option value="">Todos os riscos</option></select>
+    <input type="text" id="fBusca" placeholder="Buscar por ID, tipo, órgão emissor..." aria-label="Buscar licenças">
+    <select id="fOrdem" aria-label="Ordenar licenças">
+      <option value="urgencia">Ordenar: urgência</option>
+      <option value="vencimento">Ordenar: vencimento</option>
+      <option value="id">Ordenar: ID</option>
+      <option value="unidade">Ordenar: unidade</option>
+    </select>
     <div class="spacer"></div>
-    <div class="view-switch" id="viewSwitch" role="group" aria-label="Visualização">
-      <button class="view-btn active" id="btnListView" type="button">Lista</button>
-      <button class="view-btn" id="btnGanttView" type="button">Gantt</button>
+    <button class="btn btn-ghost" id="btnClearFilters" type="button" style="border:1px solid var(--line);">Limpar filtros</button>
     </div>
-    <button class="btn btn-ghost" id="btnClearFilters" style="border:1px solid var(--line);">Limpar filtros</button>
   </div>
 
-  <div class="panel-switch" role="group" aria-label="Painel principal">
-    <button class="view-btn" id="btnLicensePanel" type="button">Por licença</button>
-    <button class="view-btn active" id="btnUnitPanel" type="button">Por unidade</button>
-    <button class="view-btn" id="btnCalendarPanel" type="button">Calendário</button>
-  </div>
-  <div id="licList" hidden></div>
-  <div id="unitPanel"></div>
-  <div id="calendarPanel" hidden></div>
-  <div id="ganttView" hidden></div>
+  <div id="licList" role="tabpanel" aria-labelledby="btnLicensePanel" hidden></div>
+  <div id="unitPanel" role="tabpanel" aria-labelledby="btnUnitPanel"></div>
+  <div id="calendarPanel" role="tabpanel" aria-labelledby="btnCalendarPanel" hidden></div>
+  <div id="ganttView" role="tabpanel" aria-labelledby="btnGanttView" hidden></div>
 </main>
 
 <footer class="app-footer">
@@ -75,42 +99,64 @@
 
 <!-- Modal: nova licença -->
 <div class="overlay" id="overlayNewLic">
-  <div class="modal">
-    <h3>Nova licença</h3>
-    <div class="field-grid">
-      <div class="field"><label>ID</label><input id="nl_id" placeholder="L-014"></div>
-      <div class="field"><label for="nl_unidade">Unidade</label><select id="nl_unidade"><option value="">Selecione uma unidade</option></select></div>
-      <div class="field"><label>Cidade</label><input id="nl_cidade" readonly></div>
-      <div class="field"><label>UF</label><input id="nl_uf" readonly></div>
-      <div class="field wide"><label>Razão Social</label><input id="nl_razao"></div>
-      <div class="field wide"><label>Categoria</label><input id="nl_categoria" placeholder="Licenciamento Ambiental"></div>
-      <div class="field"><label>Órgão Emissor</label><input id="nl_orgao"></div>
-      <div class="field"><label>Tipo de Licença</label><input id="nl_tipo"></div>
-      <div class="field">
-        <label>Risco</label>
-        <select id="nl_risco"><option>NA</option><option>Baixo</option><option>Médio</option><option>Alto</option></select>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="newLicTitle">
+    <h3 id="newLicTitle">Nova licença</h3>
+    <p class="form-hint">Campos com <span class="req" aria-hidden="true">*</span> são obrigatórios.</p>
+    <fieldset class="form-section">
+      <legend>Identificação</legend>
+      <div class="field-grid">
+        <div class="field">
+          <label for="nl_id">ID <button class="link-btn" id="btnEditNewLicId" type="button" aria-controls="nl_id">alterar</button></label>
+          <input id="nl_id" readonly aria-describedby="nl_id_help">
+          <small class="field-help" id="nl_id_help">Gerado automaticamente</small>
+        </div>
+        <div class="field wide"><label for="nl_unidade">Unidade <span class="req" aria-hidden="true">*</span></label><select id="nl_unidade" required><option value="">Selecione uma unidade</option></select></div>
+        <div class="field"><label for="nl_razao">Razão social</label><input id="nl_razao"></div>
+        <div class="field wide"><label for="nl_cidade">Cidade</label><input id="nl_cidade" readonly></div>
+        <div class="field wide"><label for="nl_uf">UF</label><input id="nl_uf" readonly></div>
       </div>
-      <div class="field">
-        <label>Status</label>
-        <select id="nl_status"><option>Pendente</option><option>Em análise</option><option>Condicionada</option><option>Obtida</option><option>Dispensada</option><option>Indeferida</option><option>Não aplicável</option></select>
+    </fieldset>
+    <fieldset class="form-section">
+      <legend>Órgão e tipo</legend>
+      <div class="field-grid">
+        <div class="field wide"><label for="nl_categoria">Categoria</label><input id="nl_categoria" placeholder="Ex.: Licenciamento Ambiental"></div>
+        <div class="field wide"><label for="nl_orgao">Órgão emissor <span class="req" aria-hidden="true">*</span></label><input id="nl_orgao" required></div>
+        <div class="field wide"><label for="nl_tipo">Tipo de licença <span class="req" aria-hidden="true">*</span></label><input id="nl_tipo" required></div>
+        <div class="field wide">
+          <label for="nl_fluxo">Fluxo do processo</label>
+          <select id="nl_fluxo"><option value="licenca">Regulatório Licenças</option><option value="outorga">Regulatório Outorgas</option><option value="">Sem fluxo</option></select>
+        </div>
       </div>
-      <div class="field wide">
-        <label for="nl_fluxo">Fluxo do processo</label>
-        <select id="nl_fluxo"><option value="licenca">Regulatório Licenças</option><option value="outorga">Regulatório Outorgas</option><option value="">Sem fluxo</option></select>
+    </fieldset>
+    <fieldset class="form-section">
+      <legend>Situação e prazos</legend>
+      <div class="field-grid">
+        <div class="field">
+          <label for="nl_status">Status <span class="req" aria-hidden="true">*</span></label>
+          <select id="nl_status" required><option>Pendente</option><option>Em análise</option><option>Condicionada</option><option>Obtida</option><option>Dispensada</option><option>Indeferida</option><option>Não aplicável</option></select>
+        </div>
+        <div class="field">
+          <label for="nl_risco">Risco</label>
+          <select id="nl_risco"><option>NA</option><option>Baixo</option><option>Médio</option><option>Alto</option></select>
+        </div>
+        <div class="field"><label for="nl_emissao">Data de emissão</label><input type="date" id="nl_emissao"></div>
+        <div class="field"><label for="nl_vencimento">Vencimento</label><input type="date" id="nl_vencimento"></div>
       </div>
-      <div class="field"><label>Data de Emissão</label><input type="date" id="nl_emissao"></div>
-      <div class="field"><label>Vencimento</label><input type="date" id="nl_vencimento"></div>
-      <div class="field full"><label>Notas</label><textarea id="nl_notes"></textarea></div>
-    </div>
+    </fieldset>
+    <fieldset class="form-section">
+      <legend>Notas</legend>
+      <div class="field"><label for="nl_notes" class="visually-hidden">Notas</label><textarea id="nl_notes"></textarea></div>
+    </fieldset>
+    <div id="newLicError" class="auth-error" role="alert" hidden></div>
     <div class="modal-actions">
-      <button class="btn" onclick="closeModal('overlayNewLic')">Cancelar</button>
-      <button class="btn btn-primary" id="btnSaveNewLic">Criar licença</button>
+      <button class="btn" type="button" onclick="closeModal('overlayNewLic')">Cancelar</button>
+      <button class="btn btn-primary" type="button" id="btnSaveNewLic">Criar licença</button>
     </div>
   </div>
 </div>
 
 <div class="overlay" id="overlayUnit">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="unitEditorTitle">
     <h3 id="unitEditorTitle">Nova unidade</h3>
     <form id="unitForm">
       <div class="field-grid">
@@ -130,7 +176,7 @@
 </div>
 
 <div class="overlay" id="overlayEvidence">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="evidenceTitle">
     <h3 id="evidenceTitle">Comprovante do OneDrive</h3>
     <p>Vincule um arquivo ou pasta existente. O acesso depende das permissões do OneDrive.</p>
     <form id="evidenceForm">
@@ -145,7 +191,18 @@
   </div>
 </div>
 
-<div id="toast"></div>
+<div class="overlay" id="overlayConfirm">
+  <div class="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+    <h3 id="confirmTitle">Confirmar ação</h3>
+    <p id="confirmMessage"></p>
+    <div class="modal-actions">
+      <button class="btn" type="button" id="btnConfirmCancel">Cancelar</button>
+      <button class="btn btn-primary" type="button" id="btnConfirmOk">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
 
 <div class="overlay auth-overlay" id="overlayAuth">
   <div class="modal auth-modal">
@@ -170,13 +227,13 @@
 <!-- ===================== PRINT REPORT AREA ===================== -->
 <div id="print-area"></div>
 
-<script src="data/licencas.js?v=1.12.0"></script>
-<script src="data/fluxo.js?v=1.12.0"></script>
-<script src="data/fluxos-processo.js?v=1.12.0"></script>
-<script src="data/licencas_planilha.js?v=1.12.0"></script>
-<script src="data/supabase-config.js?v=1.12.0"></script>
+<script src="data/licencas.js?v=1.13.0"></script>
+<script src="data/fluxo.js?v=1.13.0"></script>
+<script src="data/fluxos-processo.js?v=1.13.0"></script>
+<script src="data/licencas_planilha.js?v=1.13.0"></script>
+<script src="data/supabase-config.js?v=1.13.0"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/data-service.js?v=1.12.0"></script>
-<script src="js/app.js?v=1.12.0"></script>
+<script src="js/data-service.js?v=1.13.0"></script>
+<script src="js/app.js?v=1.13.0"></script>
 </body>
 </html>

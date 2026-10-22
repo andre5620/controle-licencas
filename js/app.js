@@ -4,7 +4,7 @@ const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 const PROCESS_FLOWS = window.PROCESS_FLOWS || {};
 
-const APP_VERSION = '1.12.0';
+const APP_VERSION = '1.13.0';
 const LICENSE_STATUSES = ['Pendente','Em análise','Condicionada','Obtida','Dispensada','Indeferida','Não aplicável'];
 const OPEN_STATUSES = ['Pendente','Em análise','Condicionada','Indeferida'];
 const ACTIVITY_STATUSES = ['Não iniciado','Working on it','Stuck','Done','N/A'];
@@ -84,7 +84,7 @@ async function loadData(){
       const stored = JSON.parse(raw);
       MODEL = isStructuredModel(stored) ? applyReferenceData(stored) : modelFromLegacyData(stored);
       DATA = flattenModel(MODEL);
-      setSaveState('var(--amber)', 'salvo só neste navegador');
+      setSaveState('var(--amber)', 'salvo só neste navegador', '', 'local');
       return;
     }
   }
@@ -564,12 +564,62 @@ function calendarGroups(list, month){
   return groups;
 }
 
-function setSaveState(color, text, message = ''){
+/* ---------------------------------------------------------------
+   URGÊNCIA E ORDENAÇÃO
+--------------------------------------------------------------- */
+const SETTLED_STATUSES = ['Obtida','Dispensada','Não aplicável'];
+
+/* Requer ação: vencida, dentro da janela de renovação (120 dias por padrão) ou risco alto em aberto. */
+function needsAction(lic){
+  const days = daysUntil(lic.vencimento);
+  if(Number.isFinite(days) && days <= (renewalWindow(lic)?.lead ?? 120)) return true;
+  return (lic.risco || '').toLowerCase() === 'alto' && !SETTLED_STATUSES.includes(lic.status);
+}
+
+const byLicenseId = (a, b)=>String(a.id).localeCompare(String(b.id), 'pt-BR', {numeric: true});
+const dueDays = lic=>{
+  const days = daysUntil(lic.vencimento);
+  return Number.isFinite(days) ? days : Infinity;
+};
+const highRiskFirst = lic=>(lic.risco || '').toLowerCase() === 'alto' ? 0 : 1;
+const LICENSE_SORTS = {
+  urgencia: (a, b)=>dueDays(a) - dueDays(b) || highRiskFirst(a) - highRiskFirst(b) || byLicenseId(a, b),
+  vencimento: (a, b)=>dueDays(a) - dueDays(b) || byLicenseId(a, b),
+  id: byLicenseId,
+  unidade: (a, b)=>(a.unidade || '').localeCompare(b.unidade || '', 'pt-BR') || byLicenseId(a, b)
+};
+
+function sortLicenses(list, mode){
+  return [...list].sort(LICENSE_SORTS[mode] || byLicenseId);
+}
+
+/* Na ordem por urgência a lista é dividida em "Requer ação" e "Demais licenças". */
+function groupByUrgency(list){
+  return {
+    acao: sortLicenses(list.filter(needsAction), 'urgencia'),
+    demais: sortLicenses(list.filter(lic=>!needsAction(lic)), 'vencimento')
+  };
+}
+
+const SYNC_PENDING_MESSAGE = 'Você tem alterações que ainda não estão disponíveis para a equipe.';
+const LOCAL_ONLY_MESSAGE = 'Os dados estão salvos só neste navegador e não ficam disponíveis para a equipe.';
+let syncBannerAction = null;
+
+/* Indicador do cabeçalho e faixa abaixo dele. tone: 'pending' (padrão com mensagem), 'error' ou 'local'. */
+function setSaveState(color, text, message = '', tone = message ? 'pending' : ''){
   document.getElementById('saveDot').style.background = color;
   document.getElementById('saveText').textContent = text;
+  const banner = document.getElementById('syncBanner');
   const notice = document.getElementById('syncMessage');
-  notice.textContent = message;
-  notice.hidden = !message;
+  const action = document.getElementById('btnSyncNow');
+  notice.textContent = message || (tone === 'local' ? LOCAL_ONLY_MESSAGE : tone === 'pending' ? SYNC_PENDING_MESSAGE : '');
+  banner.hidden = !tone;
+  if(tone === 'error') banner.classList.add('is-error');
+  else banner.classList.remove('is-error');
+  /* Em conflito, tentar de novo não resolve: o caminho é carregar a versão do servidor. */
+  syncBannerAction = !remoteEnabled || tone === 'local' || !tone ? null : conflict ? 'btnReloadServer' : 'btnSync';
+  action.hidden = !syncBannerAction;
+  action.textContent = conflict ? 'Carregar servidor' : tone === 'error' ? 'Tentar novamente' : 'Sincronizar agora';
 }
 
 function cacheModel(pending){
@@ -583,7 +633,8 @@ function reportSyncError(error){
   setSaveState('var(--red)', pendingChanges ? 'não sincronizado' : 'erro de conexão',
     conflict
       ? 'Outra pessoa atualizou a base. Suas alterações continuam neste navegador. Exporte o relatório para preservá-las antes de carregar a versão do servidor.'
-      : `${error.message || 'Não foi possível sincronizar.'} ${pendingChanges ? 'Alterações pendentes; clique em Sincronizar para tentar novamente.' : ''}`);
+      : `${error.message || 'Não foi possível sincronizar.'} ${pendingChanges ? 'Suas alterações continuam neste navegador e ainda não estão disponíveis para a equipe.' : ''}`.trim(),
+    'error');
 }
 
 function saveData(){
@@ -609,7 +660,7 @@ function saveData(){
       cacheModel(pendingChanges);
       if(!pendingChanges){
         setSaveState(remoteEnabled ? 'var(--green)' : 'var(--amber)',
-          remoteEnabled ? 'sincronizado' : 'salvo só neste navegador');
+          remoteEnabled ? 'sincronizado' : 'salvo só neste navegador', '', remoteEnabled ? '' : 'local');
       }
       return true;
     }catch(error){
@@ -650,19 +701,145 @@ async function refreshFromServer(discardPending = false){
    TOAST
 --------------------------------------------------------------- */
 let toastTimer=null;
-function showToast(msg){
+const UNDO_TIMEOUT = 8000;
+
+/* action opcional: {label, onClick}; com ação o aviso fica 8 s na tela. */
+function showToast(msg, action = null){
   const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>t.classList.remove('show'), 2200);
+  t.textContent = msg;
+  if(action){
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'toast-action';
+    button.textContent = action.label;
+    button.addEventListener('click', ()=>{
+      t.classList.remove('show');
+      action.onClick();
+    });
+    t.append(' ', button);
+    t.classList.add('has-action');
+  }else t.classList.remove('has-action');
+  t.classList.add('show');
+  toastTimer = setTimeout(()=>t.classList.remove('show'), action ? UNDO_TIMEOUT : 2200);
+}
+
+/* ---------------------------------------------------------------
+   DESFAZER (ações reversíveis)
+   A ação vale na hora em memória; a gravação espera o aviso expirar.
+   Se outra edição gravar antes, a ação já vai junto e Desfazer grava a reversão.
+--------------------------------------------------------------- */
+let pendingUndo = null;
+
+function undoable({apply, revert, message, undoneMessage = 'Ação desfeita'}){
+  commitPendingUndo();
+  try{
+    apply();
+  }catch(error){
+    showToast(error.message);
+    return false;
+  }
+  const entry = {revert, generation: editGeneration};
+  entry.timer = setTimeout(()=>{
+    if(pendingUndo !== entry) return;
+    pendingUndo = null;
+    if(editGeneration === entry.generation) void saveData();
+  }, UNDO_TIMEOUT);
+  pendingUndo = entry;
+  render();
+  showToast(message, {label: 'Desfazer', onClick: ()=>{
+    if(pendingUndo !== entry) return;
+    clearTimeout(entry.timer);
+    pendingUndo = null;
+    entry.revert();
+    if(editGeneration !== entry.generation) void saveData();
+    render();
+    showToast(undoneMessage);
+  }});
+  return true;
+}
+
+/* A base foi substituída (restaurar, importar, carregar servidor): o Desfazer deixa de valer. */
+function discardPendingUndo(){
+  if(pendingUndo) clearTimeout(pendingUndo.timer);
+  pendingUndo = null;
+}
+
+/* Grava na hora a ação que aguardava o Desfazer (antes de recarregar, sair ou sincronizar). */
+function commitPendingUndo(){
+  if(!pendingUndo) return null;
+  const entry = pendingUndo;
+  clearTimeout(entry.timer);
+  pendingUndo = null;
+  return editGeneration === entry.generation ? saveData() : null;
 }
 
 /* ---------------------------------------------------------------
    MODAL HELPERS
 --------------------------------------------------------------- */
-function openModal(id){ document.getElementById(id).classList.add('show'); }
-function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+/* Ao abrir, foca o primeiro campo editável; ao fechar, devolve o foco a quem abriu. */
+const modalOpeners = new Map();
+const MODAL_FOCUSABLE = 'input:not([readonly]):not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])';
+
+function openModal(id){
+  const overlay = document.getElementById(id);
+  if(!overlay.classList.contains?.('show')) modalOpeners.set(id, document.activeElement);
+  overlay.classList.add('show');
+  overlay.querySelector?.(MODAL_FOCUSABLE)?.focus();
+}
+
+function closeModal(id){
+  document.getElementById(id).classList.remove('show');
+  const opener = modalOpeners.get(id);
+  modalOpeners.delete(id);
+  if(opener?.isConnected) opener.focus();
+}
+
+['overlayNewLic', 'overlayUnit', 'overlayEvidence'].forEach(id=>{
+  document.getElementById(id).addEventListener('keydown', event=>{
+    if(event.key !== 'Escape') return;
+    event.preventDefault();
+    closeModal(id);
+  });
+});
+
+/* Confirmação própria (substitui confirm()); resolve true ao confirmar. */
+let confirmResolve = null;
+
+function askConfirm({title = 'Confirmar ação', message, confirmLabel = 'Confirmar', danger = false}){
+  confirmResolve?.(false);
+  const ok = document.getElementById('btnConfirmOk');
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMessage').textContent = message;
+  ok.textContent = confirmLabel;
+  ok.className = `btn ${danger ? 'btn-danger-solid' : 'btn-primary'}`;
+  openModal('overlayConfirm');
+  document.getElementById('btnConfirmCancel').focus();
+  return new Promise(resolve=>{
+    confirmResolve = value=>{
+      confirmResolve = null;
+      closeModal('overlayConfirm');
+      resolve(value);
+    };
+  });
+}
+
+document.getElementById('btnConfirmOk').addEventListener('click', ()=>confirmResolve?.(true));
+document.getElementById('btnConfirmCancel').addEventListener('click', ()=>confirmResolve?.(false));
+document.getElementById('overlayConfirm').addEventListener('click', event=>{
+  if(event.target.id === 'overlayConfirm') confirmResolve?.(false);
+});
+document.getElementById('overlayConfirm').addEventListener('keydown', event=>{
+  if(event.key === 'Escape'){
+    event.preventDefault();
+    confirmResolve?.(false);
+  }else if(event.key === 'Tab'){
+    /* Mantém o foco entre os dois botões enquanto o modal está aberto. */
+    event.preventDefault();
+    const cancel = document.getElementById('btnConfirmCancel');
+    (document.activeElement === cancel ? document.getElementById('btnConfirmOk') : cancel).focus();
+  }
+});
 
 /* ---------------------------------------------------------------
    STATUS BADGE HELPERS
@@ -683,12 +860,22 @@ function riscoBadgeClass(r){
   if(s==='baixo') return 'b-risco-baixo';
   return 'b-risco-na';
 }
+/* Prazo em linguagem humana: dias até 60, meses aproximados até 2 anos e anos acima disso. */
+function humanSpan(days){
+  if(days <= 60) return `${days} ${days === 1 ? 'dia' : 'dias'}`;
+  if(days <= 730) return `~${Math.round(days / 30.4)} meses`;
+  const years = Math.round(days / 365);
+  return `~${years} ${years === 1 ? 'ano' : 'anos'}`;
+}
+
 function vencimentoBadge(iso){
   if(!iso) return null;
   const d = daysUntil(iso);
-  if(d<0) return {cls:'b-venc-vencido', txt:`Vencida há ${Math.abs(d)}d`};
-  if(d<=120) return {cls:'b-venc-alerta', txt:`Vence em ${d}d`};
-  return {cls:'b-venc-ok', txt:`Vence em ${d}d`};
+  const title = `Vencimento: ${fmtDate(iso)}`;
+  if(d === -1) return {cls:'b-venc-vencido', txt:'Venceu ontem', title};
+  if(d<0) return {cls:'b-venc-vencido', txt:`Vencida há ${humanSpan(-d)}`, title};
+  const txt = d === 0 ? 'Vence hoje' : d === 1 ? 'Vence amanhã' : `Vence em ${humanSpan(d)}`;
+  return {cls: d<=120 ? 'b-venc-alerta' : 'b-venc-ok', txt, title};
 }
 function actStatusClass(status){
   const s=(status||'').toLowerCase();
@@ -701,22 +888,40 @@ function actStatusClass(status){
 /* ---------------------------------------------------------------
    KPIs
 --------------------------------------------------------------- */
+/* Filtros rápidos acionados pelos KPIs; combinam com os selects sem alterar seus valores. */
+const QUICK_FILTERS = {
+  obtidas: l=>l.status==='Obtida',
+  pendentes: l=>OPEN_STATUSES.includes(l.status),
+  vencidas: l=>Boolean(l.vencimento) && daysUntil(l.vencimento)<0,
+  vencer: l=>Boolean(l.vencimento) && daysUntil(l.vencimento)>=0 && daysUntil(l.vencimento)<=120,
+  alto: l=>(l.risco||'').toLowerCase()==='alto'
+};
+let quickFilter = null;
+let unitQuickFilter = null;
+
+function kpiButton(key, n, label, cls, active){
+  return `<button type="button" class="kpi ${cls}" data-kpi="${key}" aria-pressed="${active}">
+    <span class="num">${n}</span><span class="lbl">${label}</span></button>`;
+}
+
 function renderKPIs(list){
-  const total = list.length;
-  const obtidas = list.filter(l=>l.status==='Obtida').length;
-  const pendentes = list.filter(l=>OPEN_STATUSES.includes(l.status)).length;
-  const vencidas = list.filter(l=>l.vencimento && daysUntil(l.vencimento)<0).length;
-  const altoRisco = list.filter(l=>(l.risco||'').toLowerCase()==='alto').length;
+  const count = key=>list.filter(QUICK_FILTERS[key]).length;
   const kpis = [
-    {n:total, l:'Licenças no escopo', cls:''},
-    {n:obtidas, l:'Obtidas', cls:'accent-green'},
-    {n:pendentes, l:'Pendentes / em andamento', cls:'accent-amber'},
-    {n:vencidas, l:'Vencidas ou em atraso', cls:'accent-red'},
-    {n:altoRisco, l:'Risco alto', cls:'accent-purple'},
+    ['', list.length, 'Licenças no escopo', ''],
+    ['obtidas', count('obtidas'), 'Obtidas', 'accent-green'],
+    ['pendentes', count('pendentes'), 'Pendentes / em andamento', 'accent-amber'],
+    ['vencidas', count('vencidas'), 'Vencidas ou em atraso', 'accent-red'],
+    ['alto', count('alto'), 'Risco alto', 'accent-purple'],
   ];
-  document.getElementById('kpiRow').innerHTML = kpis.map(k=>`
-    <div class="kpi ${k.cls}"><div class="num">${k.n}</div><div class="lbl">${k.l}</div></div>
-  `).join('');
+  const row = document.getElementById('kpiRow');
+  row.innerHTML = kpis.map(([key, n, label, cls])=>kpiButton(key, n, label, cls, Boolean(key) && key === quickFilter)).join('');
+  row.querySelectorAll('[data-kpi]').forEach(button=>button.addEventListener('click', ()=>{
+    const key = button.dataset.kpi;
+    quickFilter = key && key !== quickFilter ? key : null;
+    if(activePanel === 'license' && activeView === 'list') render();
+    else navigatePanel('#view=licencas');
+    document.querySelector(`#kpiRow [data-kpi="${key}"]`)?.focus();
+  }));
 }
 
 /* ---------------------------------------------------------------
@@ -735,12 +940,14 @@ function populateFilterOptions(){
   fr.innerHTML = '<option value="">Todos os riscos</option>' + riscos.map(r=>`<option>${r}</option>`).join('');
   fu.value = cur.u; fs.value = cur.s; fr.value = cur.r;
 }
-function getFiltered(){
+function getFiltered({ignoreQuick = false} = {}){
   const u = document.getElementById('fUnidade').value;
   const s = document.getElementById('fStatus').value;
   const r = document.getElementById('fRisco').value;
   const q = document.getElementById('fBusca').value.trim().toLowerCase();
+  const quick = ignoreQuick ? null : QUICK_FILTERS[quickFilter];
   return DATA.filter(l=>{
+    if(quick && !quick(l)) return false;
     if(u && l.unidade!==u) return false;
     if(s && l.status!==s) return false;
     if(r && l.risco!==r) return false;
@@ -757,8 +964,9 @@ function getFiltered(){
 --------------------------------------------------------------- */
 function render(){
   populateFilterOptions();
+  /* Os números dos KPIs ignoram o filtro rápido para que continuem servindo de atalho. */
+  renderKPIs(getFiltered({ignoreQuick: true}));
   const list = getFiltered();
-  renderKPIs(list);
   const root = document.getElementById('licList');
   const unitPanel = document.getElementById('unitPanel');
   const gantt = document.getElementById('ganttView');
@@ -774,12 +982,14 @@ function render(){
   unitPanel.hidden = activePanel !== 'unit';
   calendar.hidden = activePanel !== 'calendar';
   gantt.hidden = activePanel !== 'license' || activeView !== 'gantt';
-  document.getElementById('viewSwitch').hidden = activePanel !== 'license';
-  document.getElementById('btnLicensePanel').classList.toggle('active', activePanel === 'license');
-  document.getElementById('btnUnitPanel').classList.toggle('active', activePanel === 'unit');
-  document.getElementById('btnCalendarPanel').classList.toggle('active', activePanel === 'calendar');
-  document.getElementById('btnListView').classList.toggle('active', activeView === 'list');
-  document.getElementById('btnGanttView').classList.toggle('active', activeView === 'gantt');
+  document.getElementById('fOrdem').hidden = activePanel !== 'license' || activeView !== 'list';
+  updateFilterCount();
+  const current = currentViewKey();
+  VIEW_TABS.forEach(([id, view])=>{
+    const tab = document.getElementById(id);
+    tab.setAttribute('aria-selected', String(view === current));
+    tab.tabIndex = view === current ? 0 : -1;
+  });
   if(activePanel === 'calendar'){
     renderCalendar(list);
     return;
@@ -797,7 +1007,18 @@ function render(){
     root.innerHTML = `<div class="empty">Nenhuma licença encontrada com os filtros atuais.</div>`;
     return;
   }
-  root.innerHTML = list.map(lic=>renderCard(lic)).join('');
+  const order = document.getElementById('fOrdem').value || 'urgencia';
+  if(order === 'urgencia'){
+    const {acao, demais} = groupByUrgency(list);
+    const group = (id, title, items, empty)=>`<section class="lic-group" aria-labelledby="${id}">
+      <h2 class="lic-group-head" id="${id}">${title} <span class="lic-group-count">· ${items.length}</span></h2>
+      ${items.length ? items.map(lic=>renderCard(lic)).join('') : `<p class="lic-group-empty">${empty}</p>`}
+    </section>`;
+    root.innerHTML = group('grpAcao', 'Requer ação', acao, 'Nenhuma licença requer ação agora ✓')
+      + (demais.length ? group('grpDemais', 'Demais licenças', demais, '') : '');
+  }else{
+    root.innerHTML = sortLicenses(list, order).map(lic=>renderCard(lic)).join('');
+  }
   attachCardEvents();
   attachEvidenceEvents(root);
 }
@@ -811,9 +1032,48 @@ function navigatePanel(hash){
   applyPanelRoute();
 }
 
+/* Abas de visão: refletidas no hash (#view=...), sem quebrar #unit=ID nem os endereços antigos. */
+const VIEW_ROUTES = {
+  unidades: {panel: 'unit'},
+  licencas: {panel: 'license', view: 'list'},
+  calendario: {panel: 'calendar'},
+  gantt: {panel: 'license', view: 'gantt'}
+};
+const LEGACY_VIEW_HASHES = {'#units': 'unidades', '#licenses': 'licencas', '#calendar': 'calendario'};
+const VIEW_TABS = [['btnUnitPanel', 'unidades'], ['btnLicensePanel', 'licencas'], ['btnCalendarPanel', 'calendario'], ['btnGanttView', 'gantt']];
+const VIEW_PREFERENCE_KEY = 'licencas-solinftec-ui:view';
+
+function currentViewKey(){
+  if(activePanel === 'unit') return 'unidades';
+  if(activePanel === 'calendar') return 'calendario';
+  return activeView === 'gantt' ? 'gantt' : 'licencas';
+}
+
+function routeView(hash){
+  if(LEGACY_VIEW_HASHES[hash]) return LEGACY_VIEW_HASHES[hash];
+  const params = new URLSearchParams(hash.slice(1));
+  if(params.get('unit')) return 'unidades';
+  const view = params.get('view');
+  return VIEW_ROUTES[view] ? view : null;
+}
+
+function storedView(){
+  try{
+    const view = localStorage.getItem(VIEW_PREFERENCE_KEY);
+    return VIEW_ROUTES[view] ? view : null;
+  }catch{
+    return null;
+  }
+}
+
 function applyPanelRoute(){
-  const hash = window.location.hash;
-  activePanel = hash === '#licenses' ? 'license' : hash === '#calendar' ? 'calendar' : 'unit';
+  const routed = routeView(window.location.hash || '');
+  const view = routed || storedView() || 'unidades';
+  activePanel = VIEW_ROUTES[view].panel;
+  activeView = VIEW_ROUTES[view].view || activeView;
+  if(routed){
+    try{ localStorage.setItem(VIEW_PREFERENCE_KEY, view); }catch{ /* preferência opcional */ }
+  }
   if(appReady) render();
 }
 
@@ -821,8 +1081,7 @@ window.addEventListener('hashchange', applyPanelRoute);
 
 function openLicense(id){
   expandedIds.add(id);
-  activeView = 'list';
-  navigatePanel('#licenses');
+  navigatePanel('#view=licencas');
   const card = window.CSS ? document.querySelector(`.lic-card[data-id="${window.CSS.escape(id)}"]`) : null;
   card?.scrollIntoView({block: 'start'});
 }
@@ -897,9 +1156,11 @@ function renderUnitDetail(id){
     return;
   }
   const licenses = DATA.filter(lic=>lic.unidadeId === id);
-  const pending = licenses.filter(lic=>OPEN_STATUSES.includes(lic.status)).length;
-  const expired = licenses.filter(lic=>lic.vencimento && daysUntil(lic.vencimento) < 0).length;
-  const due = licenses.filter(lic=>lic.vencimento && daysUntil(lic.vencimento) >= 0 && daysUntil(lic.vencimento) <= 120).length;
+  const unitFilter = unitQuickFilter?.unitId === id ? unitQuickFilter.key : null;
+  const shown = unitFilter ? licenses.filter(QUICK_FILTERS[unitFilter]) : licenses;
+  const count = key=>licenses.filter(QUICK_FILTERS[key]).length;
+  const unitKpis = [['', licenses.length, 'Licenças'], ['pendentes', count('pendentes'), 'Pendentes / em andamento'],
+    ['vencidas', count('vencidas'), 'Vencidas'], ['vencer', count('vencer'), 'Vencem em até 120 dias']];
   root.innerHTML = `<article class="unit-detail">
     ${back}
     <header class="unit-detail-header"><div><div class="unit-panel-kicker">Unidade</div>
@@ -909,29 +1170,72 @@ function renderUnitDetail(id){
         <button class="btn btn-danger" data-delete-unit="${esc(unit.id)}">Excluir unidade</button>
         <button class="btn btn-primary" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
     </header>
-    <div class="unit-detail-summary">
-      <div class="kpi"><div class="num">${licenses.length}</div><div class="lbl">Licenças</div></div>
-      <div class="kpi"><div class="num">${pending}</div><div class="lbl">Pendentes / em andamento</div></div>
-      <div class="kpi"><div class="num">${expired}</div><div class="lbl">Vencidas</div></div>
-      <div class="kpi"><div class="num">${due}</div><div class="lbl">Vencem em até 120 dias</div></div>
+    <div class="unit-detail-summary" id="unitKpis">
+      ${unitKpis.map(([key, n, label])=>kpiButton(key, n, label, '', Boolean(key) && key === unitFilter)).join('')}
     </div>
     <section class="unit-detail-section" aria-label="Perfil da unidade">
-      ${renderUnitProfile({perfilUnidade: unit.profile || {}}) || '<h2>Perfil da unidade</h2><p>Perfil ainda não preenchido. Use Editar unidade.</p>'}
+      ${renderUnitProfileRead(unit)}
     </section>
     <section class="unit-detail-section">${renderEvidence('unit', unit)}</section>
     <section class="unit-detail-section"><h2>Obrigações ambientais</h2>
-      ${(unit.environmentalLicenses || []).map(item=>`<div class="notes-box"><strong>${esc(item.tipo)}</strong>
-        <p>${esc(item.orgao)} · ${esc(item.numero || 'Sem número')}</p>
-        <p>${esc(item.motivacao || '')}</p><p>${esc(item.risco || '')}</p></div>`).join('') || '<p>Nenhuma obrigação cadastrada.</p>'}
+      ${renderObligations(unit, licenses)}
     </section>
     <section class="unit-detail-section">${renderUnitFlow(unit)}</section>
-    <section class="unit-detail-section"><h2>Licenças da unidade</h2>
-      ${licenses.map(lic=>renderCard(lic)).join('') || '<p>Nenhuma licença cadastrada. Use + Nova licença para adicionar a primeira.</p>'}
+    <section class="unit-detail-section" id="unitLicenses"><h2>Licenças da unidade${unitFilter ? ` <span class="lic-group-count">· ${shown.length} de ${licenses.length}</span>` : ''}</h2>
+      ${!licenses.length ? `<div class="empty-cta"><p>Nenhuma licença cadastrada nesta unidade. Use o botão abaixo para adicionar a primeira.</p>
+          <button class="btn btn-primary" type="button" data-new-unit-license="${esc(unit.id)}">+ Criar primeira licença</button></div>`
+        : shown.map(lic=>renderCard(lic)).join('') || '<p>Nenhuma licença desta unidade com o filtro selecionado.</p>'}
     </section>
   </article>`;
+  root.querySelectorAll('#unitKpis [data-kpi]').forEach(button=>button.addEventListener('click', ()=>{
+    const key = button.dataset.kpi;
+    unitQuickFilter = key && key !== unitFilter ? {unitId: id, key} : null;
+    render();
+    document.querySelector(`#unitKpis [data-kpi="${key}"]`)?.focus({preventScroll: true});
+    document.getElementById('unitLicenses')?.scrollIntoView({block: 'start', behavior: 'smooth'});
+  }));
   attachUnitPanelEvents();
   attachCardEvents();
   attachEvidenceEvents(root);
+}
+
+/* Status e prazo da obrigação: os dela, se houver; senão os da licença da unidade com o mesmo órgão e tipo. */
+function obligationLicense(item, licenses){
+  const orgao = normalizeKey(item.orgao);
+  const tipo = normalizeKey(item.tipo);
+  if(!orgao || !tipo) return null;
+  return licenses.find(lic=>{
+    const licTipo = normalizeKey(lic.tipoLicenca);
+    return normalizeKey(lic.orgaoEmissor) === orgao && licTipo && (licTipo.includes(tipo) || tipo.includes(licTipo));
+  }) || null;
+}
+
+function obligationStatus(item, license){
+  if(item.status) return item.status;
+  if(license?.status) return license.status;
+  return /dispens|inexig/i.test(item.motivacao || '') ? 'Dispensada' : '';
+}
+
+function renderObligations(unit, licenses){
+  const items = unit.environmentalLicenses || [];
+  if(!items.length) return '<p>Nenhuma obrigação cadastrada.</p>';
+  const rows = items.map(item=>{
+    const license = obligationLicense(item, licenses);
+    const status = obligationStatus(item, license);
+    const prazo = item.prazo || item.vencimento || license?.vencimento || '';
+    return `<tr>
+      <td data-label="Obrigação"><strong>${esc(item.tipo || item.name || '—')}</strong>
+        ${item.tema || item.motivacao ? `<small>${esc([item.tema, item.motivacao].filter(Boolean).join(' · '))}</small>` : ''}</td>
+      <td data-label="Órgão">${esc(item.orgao || '—')}</td>
+      <td data-label="Nº/Processo">${esc(item.numero || '—')}</td>
+      <td data-label="Status">${status ? `<span class="badge ${statusBadgeClass(status)}">${esc(status)}</span>` : '—'}</td>
+      <td data-label="Prazo">${/^\d{4}-\d{2}-\d{2}$/.test(prazo) ? esc(fmtDate(prazo)) : esc(prazo || '—')}</td>
+    </tr>`;
+  }).join('');
+  return `<table class="obligations-table">
+    <thead><tr><th scope="col">Obrigação</th><th scope="col">Órgão</th><th scope="col">Nº/Processo</th><th scope="col">Status</th><th scope="col">Prazo</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 /* Diagrama em raias do fluxograma, com o andamento das atividades de cada etapa. */
@@ -980,10 +1284,18 @@ function renderUnitFlow(unit){
   const target = licenses.find(lic=>spreadsheetFlowFor(lic));
   const hint = target && !target.fluxo
     ? `<p class="flow-help">Aplicar o fluxo de Licenças na licença ${esc(target.id)} importa as ${spreadsheetFlowFor(target).etapas.length} atividades da planilha desta unidade, cada uma ligada a uma etapa do fluxograma.</p>` : '';
+  /* Botões que aplicam o fluxo sugerido direto daqui, sem precisar abrir a licença. */
+  const applyButton = lic=>{
+    const type = suggestedFlowType(lic);
+    if(lic.fluxo || !PROCESS_FLOWS[type]) return '';
+    return `<button class="btn ${lic === target ? 'btn-primary' : ''}" type="button" data-flow-apply-direct="${esc(lic.id)}" data-flow-type="${esc(type)}">Aplicar fluxo de ${type === 'outorga' ? 'Outorgas' : 'Licenças'} na ${esc(lic.id)}</button>`;
+  };
   if(!flows.length){
-    return `<h2>Fluxo da unidade</h2><p>Nenhuma licença desta unidade segue o fluxograma ainda. Abra uma licença abaixo e use Aplicar fluxo.</p>${hint}`;
+    const buttons = licenses.map(applyButton).join('');
+    return `<h2>Fluxo da unidade</h2><p>Nenhuma licença desta unidade segue o fluxograma ainda.${buttons ? '' : ' Cadastre uma licença para aplicar o fluxo.'}</p>${hint}
+      ${buttons ? `${target ? '' : '<p class="flow-help">Aplicar o fluxo acrescenta as etapas do fluxograma e mantém as atividades atuais da licença.</p>'}<div class="unit-actions">${buttons}</div>` : ''}`;
   }
-  return `<h2>Fluxo da unidade</h2>${hint}
+  return `<h2>Fluxo da unidade</h2>${hint}${hint ? `<div class="unit-actions">${applyButton(target)}</div>` : ''}
     ${flows.map(lic=>`<div class="unit-flow-license">
       <div class="unit-flow-head"><div><strong>${esc(lic.id)} · ${esc(lic.tipoLicenca || lic.categoria || '—')}</strong>
         <p>${esc(PROCESS_FLOWS[lic.fluxo.tipo].nome)} · ${esc(flowSummary(lic))}</p></div>
@@ -997,9 +1309,10 @@ function renderUnitPanel(list){
   const selected = document.getElementById('fUnidade').value;
   const query = document.getElementById('fBusca').value.trim().toLowerCase();
   const licenseFilter = document.getElementById('fStatus').value || document.getElementById('fRisco').value;
-  const entries = (MODEL?.units || []).map(unit=>({
-    unit, licenses: list.filter(lic=>lic.unidadeId === unit.id)
-  })).filter(({unit, licenses})=>{
+  const entries = (MODEL?.units || []).map(unit=>{
+    const licenses = list.filter(lic=>lic.unidadeId === unit.id);
+    return {unit, licenses, urgent: licenses.filter(needsAction).length};
+  }).filter(({unit, licenses})=>{
     if(selected && (unit.nome || unit.codigo) !== selected) return false;
     if(licenses.length) return true;
     if(licenseFilter || DATA.some(lic=>lic.unidadeId === unit.id)) return false;
@@ -1009,14 +1322,16 @@ function renderUnitPanel(list){
     root.innerHTML = '<div class="empty">Nenhuma unidade encontrada com os filtros atuais.</div>';
     return;
   }
-  root.innerHTML = `<div class="unit-panel-grid">${entries.sort((a,b)=>a.unit.nome.localeCompare(b.unit.nome)).map(({unit, licenses})=>{
+  /* Unidades com mais licenças que requerem ação aparecem primeiro. */
+  entries.sort((a,b)=>b.urgent - a.urgent || (a.unit.nome || '').localeCompare(b.unit.nome || '', 'pt-BR'));
+  root.innerHTML = `<div class="unit-panel-grid">${entries.map(({unit, licenses, urgent})=>{
     const name = unit.nome || unit.codigo;
     const sample = unit;
     const profile = unit.profile || {};
     const done = licenses.reduce((sum, lic)=>sum+(lic.activities||[]).filter(a=>a.status==='Done').length,0);
     const activityTotal = licenses.reduce((sum, lic)=>sum+(lic.activities||[]).length,0);
     return `<article class="unit-panel">
-      <div class="unit-panel-head"><div><div class="unit-panel-kicker">Unidade</div><h2>${esc(name)}</h2><p>${esc(sample.cidade || '')}${sample.uf ? `/${esc(sample.uf)}` : ''}</p></div><button class="btn btn-ghost" data-edit-unit="${esc(unit.id)}">Editar unidade</button></div>
+      <div class="unit-panel-head"><div><div class="unit-panel-kicker">Unidade</div><h2>${esc(name)}</h2>${urgent ? `<span class="badge badge-acao">${urgent} ${urgent === 1 ? 'requer' : 'requerem'} ação</span>` : ''}<p>${esc(sample.cidade || '')}${sample.uf ? `/${esc(sample.uf)}` : ''}</p></div><button class="btn btn-ghost" data-edit-unit="${esc(unit.id)}">Editar unidade</button></div>
       <div class="unit-summary"><span><strong>${licenses.length}</strong> processos</span><span><strong>${unit.environmentalLicenses?.length || 0}</strong> obrigações</span><span><strong>${done}/${activityTotal}</strong> etapas concluídas</span></div>
       <div class="unit-actions"><a class="btn" href="#unit=${encodeURIComponent(unit.id)}">Abrir unidade</a><button class="btn" data-new-unit-license="${esc(unit.id)}">+ Nova licença</button></div>
       <div class="unit-profile-strip"><span><b>Razão social</b>${esc(profile.razaoSocial || sample.razaoSocial || 'Não informado')}</span><span><b>Atividade</b>${esc(profile.atividadesConduzidas || 'Não informado')}</span><span><b>Área</b>${esc(profile.area || 'Não informado')}</span></div>
@@ -1031,13 +1346,17 @@ function attachUnitPanelEvents(){
   document.querySelectorAll('[data-delete-unit]').forEach(button=>button.addEventListener('click', ()=>{
     void deleteUnit(button.dataset.deleteUnit);
   }));
-  document.querySelectorAll('[data-back-units]').forEach(button=>button.addEventListener('click', ()=>navigatePanel('#units')));
+  document.querySelectorAll('[data-back-units]').forEach(button=>button.addEventListener('click', ()=>navigatePanel('#view=unidades')));
   document.querySelectorAll('[data-open-unit-license]').forEach(button=>button.addEventListener('click', ()=>{
     const id = button.dataset.openUnitLicense;
     expandedIds.add(id);
     render();
     const card = window.CSS ? document.querySelector(`.lic-card[data-id="${window.CSS.escape(id)}"]`) : null;
     card?.scrollIntoView({block: 'start'});
+  }));
+  document.querySelectorAll('[data-flow-apply-direct]').forEach(button=>button.addEventListener('click', ()=>{
+    const type = button.dataset.flowType;
+    void runFlowAction(button.dataset.flowApplyDirect, lic=>applyFlow(lic, type), 'Fluxo aplicado');
   }));
   document.querySelectorAll('[data-edit-unit]').forEach(button=>button.addEventListener('click', ()=>{
     openUnitEditor(button.dataset.editUnit);
@@ -1057,7 +1376,11 @@ async function deleteUnit(id){
     showToast('Não é possível excluir: a unidade possui licenças vinculadas. Remova ou transfira as licenças antes.');
     return false;
   }
-  if(!confirm(`Excluir a unidade "${unit.nome || unit.codigo}" para todos os colaboradores? O perfil, as obrigações, o fluxo e os vínculos de comprovantes serão removidos. Arquivos no OneDrive não serão apagados.`)){
+  if(!await askConfirm({
+    title: 'Excluir unidade',
+    message: `Excluir a unidade "${unit.nome || unit.codigo}" para todos os colaboradores? O perfil, as obrigações, o fluxo e os vínculos de comprovantes serão removidos. Arquivos no OneDrive não serão apagados.`,
+    confirmLabel: `Excluir ${unit.nome || unit.codigo}`, danger: true
+  })){
     return false;
   }
   MODEL.units = MODEL.units.filter(item=>item.id !== id);
@@ -1065,7 +1388,7 @@ async function deleteUnit(id){
     document.getElementById('fUnidade').value = '';
   }
   const saving = saveData();
-  navigatePanel('#units');
+  navigatePanel('#view=unidades');
   const saved = await saving;
   showToast(saved ? 'Unidade excluída' : 'Exclusão local pendente de sincronização');
   return saved;
@@ -1129,16 +1452,15 @@ function renderCard(lic){
       <div class="badges">
         <span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status||'—')}</span>
         <span class="badge ${riscoBadgeClass(lic.risco)}">Risco ${esc(lic.risco||'NA')}</span>
-        ${venc?`<span class="badge ${venc.cls}">${venc.txt}</span>`:''}
+        ${venc?`<span class="badge ${venc.cls}" title="${esc(venc.title)}">${esc(venc.txt)}</span>`:''}
       </div>
     </div>
     <div class="lic-body">
+      ${renderUnitProfile(lic)}
       ${renderFields(lic)}
-        ${renderUnitProfile(lic)}
       ${renderEvidence('license', lic)}
       ${renderFlow(lic)}
       ${renderActivities(lic)}
-      ${lic.notes?`<div class="notes-box">📝 ${esc(lic.notes)}</div>`:''}
       <div class="card-footer">
         <span style="font-size:11px;color:var(--ink-soft);">Última atualização: ${esc(lic.lastUpdated||'—')}</span>
         <button class="btn btn-danger" data-del-lic="${esc(lic.id)}">Excluir licença</button>
@@ -1147,41 +1469,132 @@ function renderCard(lic){
   </div>`;
 }
 
+/* Só um card fica em edição por vez; as mudanças ficam no rascunho até Salvar. */
+let licenseEditor = null;
+const LICENSE_EDIT_FIELDS = ['risco','razaoSocial','categoria','orgaoEmissor','tipoLicenca','status','dataEmissao','vencimento','antecedenciaDias','notes'];
+
+function readItem(label, value, cls = ''){
+  const text = String(value ?? '').trim();
+  return `<div class="${cls}"><dt>${label}</dt><dd class="${text ? '' : 'is-empty'}">${text ? esc(text) : '—'}</dd></div>`;
+}
+
 function renderFields(lic){
-  const f = (label,key,type='text')=>`
-    <div class="field"><label>${label}</label><input type="${type}" data-lic="${esc(lic.id)}" data-field="${key}" value="${esc(lic[key]||'')}" ${['unidade','cidade','uf'].includes(key) ? 'readonly title="Altere pelo cadastro da unidade"' : ''}></div>`;
+  const id = esc(lic.id);
+  const defaultLead = PROCESS_FLOWS[lic.fluxo?.tipo || suggestedFlowType(lic)]?.antecedenciaDias || 120;
+  if(licenseEditor?.id !== lic.id){
+    return `<div class="section-label">Dados da licença
+        <button class="btn btn-small" type="button" data-edit-lic="${id}">Editar licença</button></div>
+      <dl class="read-grid">
+        ${readItem('Unidade', lic.unidade)}
+        ${readItem('Cidade / UF', lic.cidade ? `${lic.cidade}/${lic.uf || ''}` : '')}
+        ${readItem('Risco', lic.risco)}
+        ${readItem('Status', lic.status)}
+        ${readItem('Razão social', lic.razaoSocial, 'wide')}
+        ${readItem('Categoria', lic.categoria, 'wide')}
+        ${readItem('Órgão emissor', lic.orgaoEmissor)}
+        ${readItem('Tipo de licença', lic.tipoLicenca)}
+        ${readItem('Data de emissão', lic.dataEmissao ? fmtDate(lic.dataEmissao) : '')}
+        ${readItem('Vencimento', lic.vencimento ? fmtDate(lic.vencimento) : '')}
+        ${readItem('Janela de renovação', `${lic.antecedenciaDias || defaultLead} dias${lic.antecedenciaDias ? '' : ' (padrão)'}`)}
+        ${readItem('Notas', lic.notes, 'full notes')}
+      </dl>`;
+  }
+  const value = key=>licenseEditor.draft[key] ?? lic[key] ?? '';
+  const inputId = key=>`ed_${id}_${key}`;
+  const f = (label,key,type='text',cls='')=>`
+    <div class="field ${cls}"><label for="${inputId(key)}">${label}</label><input id="${inputId(key)}" type="${type}" data-lic="${id}" data-field="${key}" value="${esc(value(key))}"></div>`;
   const sel = (label,key,options)=>`
-    <div class="field"><label>${label}</label>
-    <select data-lic="${esc(lic.id)}" data-field="${key}">
-      ${options.map(o=>`<option ${o===lic[key]?'selected':''}>${o}</option>`).join('')}
+    <div class="field"><label for="${inputId(key)}">${label}</label>
+    <select id="${inputId(key)}" data-lic="${id}" data-field="${key}">
+      ${options.map(o=>`<option ${o===value(key)?'selected':''}>${esc(o)}</option>`).join('')}
     </select></div>`;
-  return `<div class="field-grid">
-    ${f('Unidade','unidade')}
-    ${f('Cidade','cidade')}
-    ${f('UF','uf')}
-    ${sel('Risco','risco',['NA','Baixo','Médio','Alto'])}
-    <div class="field wide"><label>Razão Social</label><input data-lic="${esc(lic.id)}" data-field="razaoSocial" value="${esc(lic.razaoSocial||'')}"></div>
-    <div class="field wide"><label>Categoria</label><input data-lic="${esc(lic.id)}" data-field="categoria" value="${esc(lic.categoria||'')}"></div>
-    ${f('Órgão Emissor','orgaoEmissor')}
-    ${f('Tipo de Licença','tipoLicenca')}
-    ${sel('Status','status',LICENSE_STATUSES)}
-    ${f('Data de Emissão','dataEmissao','date')}
-    ${f('Vencimento','vencimento','date')}
-    <div class="field"><label>Janela de renovação (dias)</label><input type="number" min="1" step="1" data-lic="${esc(lic.id)}" data-field="antecedenciaDias" value="${esc(lic.antecedenciaDias||'')}" placeholder="${esc(PROCESS_FLOWS[lic.fluxo?.tipo || suggestedFlowType(lic)]?.antecedenciaDias || 120)}" title="Dias antes do vencimento em que a renovação entra no ciclo mensal"></div>
-    <div class="field full"><label>Notas</label><textarea data-lic="${esc(lic.id)}" data-field="notes">${esc(lic.notes||'')}</textarea></div>
+  return `<div class="license-editor" data-editor="${id}">
+    <div class="section-label">Editando dados da licença<span class="editor-hint">Esc cancela · Ctrl+Enter salva</span></div>
+    <dl class="read-grid">
+      ${readItem('Unidade', lic.unidade)}
+      ${readItem('Cidade / UF', lic.cidade ? `${lic.cidade}/${lic.uf || ''}` : '')}
+    </dl>
+    <div class="field-grid">
+      ${sel('Risco','risco',['NA','Baixo','Médio','Alto'])}
+      ${sel('Status','status',LICENSE_STATUSES)}
+      ${f('Razão social','razaoSocial','text','wide')}
+      ${f('Categoria','categoria','text','wide')}
+      ${f('Órgão emissor','orgaoEmissor')}
+      ${f('Tipo de licença','tipoLicenca')}
+      ${f('Data de emissão','dataEmissao','date')}
+      ${f('Vencimento','vencimento','date')}
+      <div class="field"><label for="${inputId('antecedenciaDias')}">Janela de renovação (dias)</label><input id="${inputId('antecedenciaDias')}" type="number" min="1" step="1" data-lic="${id}" data-field="antecedenciaDias" value="${esc(value('antecedenciaDias'))}" placeholder="${esc(defaultLead)}" title="Dias antes do vencimento em que a renovação entra no ciclo mensal"></div>
+      <div class="field full"><label for="${inputId('notes')}">Notas</label><textarea id="${inputId('notes')}" data-lic="${id}" data-field="notes">${esc(value('notes'))}</textarea></div>
+    </div>
+    <div class="editor-actions">
+      <button class="btn" type="button" data-edit-cancel="${id}">Cancelar</button>
+      <button class="btn btn-primary" type="button" data-edit-save="${id}">Salvar</button>
+    </div>
   </div>`;
 }
 
+/* Abre o editor de uma licença, confirmando antes de descartar o rascunho de outra. */
+async function startLicenseEdit(id){
+  if(licenseEditor?.dirty && licenseEditor.id !== id && !await askConfirm({
+    message: `Descartar as alterações não salvas da licença ${licenseEditor.id}?`, confirmLabel: 'Descartar alterações', danger: true
+  })) return false;
+  licenseEditor = {id, draft: {}, dirty: false};
+  expandedIds.add(id);
+  render();
+  document.querySelector(`[data-editor="${window.CSS ? CSS.escape(id) : id}"] [data-field]`)?.focus();
+  return true;
+}
+
+function focusEditButton(id){
+  document.querySelector(`[data-edit-lic="${window.CSS ? CSS.escape(id) : id}"]`)?.focus();
+}
+
+function cancelLicenseEdit(){
+  const id = licenseEditor?.id;
+  licenseEditor = null;
+  render();
+  if(id) focusEditButton(id);
+}
+
+async function saveLicenseEdit(){
+  const editor = licenseEditor;
+  const lic = editor && DATA.find(item=>item.id === editor.id);
+  if(!lic){
+    licenseEditor = null;
+    showToast('A licença não está mais disponível. Carregue o servidor.');
+    render();
+    return false;
+  }
+  LICENSE_EDIT_FIELDS.forEach(key=>{
+    if(key in editor.draft) lic[key] = editor.draft[key];
+  });
+  licenseEditor = null;
+  const saving = saveData();
+  render();
+  focusEditButton(lic.id);
+  const saved = await saving;
+  showToast(saved ? 'Licença salva' : 'Licença salva localmente; sincronização pendente');
+  return saved;
+}
+
+/* Dentro da licença o perfil aparece resumido; a edição fica na página da unidade. */
 function renderUnitProfile(lic){
   const profile = lic.perfilUnidade || {};
-  const licenses = lic.licencasUnidade || [];
-  const fields = PROFILE_FIELDS.filter(([, key])=>profile[key]);
-  if(!fields.length) return '';
-  return `<div class="section-label">Perfil da unidade</div>
-    <div class="field-grid unit-profile">
-      ${fields.map(([label, key])=>`<div class="field ${['endereco','atividadeAmbiental','atividadesConduzidas'].includes(key)?'wide':''}"><label>${label}</label><div class="profile-value">${esc(profile[key])}</div></div>`).join('')}
-    </div>
-    ${licenses.length?`<details class="standard-flow"><summary>Obrigações ambientais (${licenses.length})</summary><ul>${licenses.map(item=>`<li><strong>${esc(item.tipo)}</strong> · ${esc(item.orgao)} · ${esc(item.numero || 'sem número')} · ${esc(item.risco)}</li>`).join('')}</ul></details>`:''}`;
+  const parts = [['Razão social', profile.razaoSocial || lic.razaoSocial], ['CNPJ', profile.cnpj || lic.cnpj], ['Área', profile.area]]
+    .filter(([, value])=>value);
+  return `<div class="unit-profile-line"><span class="unit-profile-line-label">Perfil da unidade</span>
+    <span class="unit-profile-line-values">${parts.map(([label, value])=>`<span><b>${label}:</b> ${esc(value)}</span>`).join(' · ') || 'Perfil ainda não preenchido.'}</span>
+    ${lic.unidadeId ? `<a href="#unit=${encodeURIComponent(lic.unidadeId)}">Ver/editar perfil da unidade →</a>` : ''}
+  </div>`;
+}
+
+function renderUnitProfileRead(unit){
+  const profile = unit.profile || {};
+  const wide = ['endereco','atividadeAmbiental','atividadesConduzidas'];
+  return `<h2>Perfil da unidade</h2>
+    <dl class="read-grid">
+      ${PROFILE_FIELDS.map(([label, key])=>readItem(label, profile[key] ?? unit[key], wide.includes(key) ? 'wide' : '')).join('')}
+    </dl>`;
 }
 
 function flowStepOptions(lic){
@@ -1205,15 +1618,15 @@ function renderActivities(lic){
       </select></td>` : '';
     return `
     <tr data-lic="${esc(lic.id)}" data-idx="${i}">
-      <td><input data-af="name" value="${esc(a.name)}"></td>${stepCell}
-      <td><input data-af="owner" value="${esc(a.owner||'')}" placeholder="responsável"></td>
+      <td><input data-af="name" value="${esc(a.name)}" aria-label="Atividade"></td>${stepCell}
+      <td><input data-af="owner" value="${esc(a.owner||'')}" placeholder="Definir responsável" aria-label="Responsável"></td>
       <td>
         <select data-af="status" class="act-status ${actStatusClass(a.status)}">
           ${ACTIVITY_STATUSES.map(s=>`<option ${s===a.status?'selected':''}>${s}</option>`).join('')}
         </select>
       </td>
       <td><input type="date" data-af="date" value="${esc(a.date||'')}" class="${overdue?'act-overdue':''}"></td>
-      <td><input data-af="observacao" value="${esc(a.observacao||'')}" placeholder="observação"></td>
+      <td><input data-af="observacao" value="${esc(a.observacao||'')}" placeholder="Adicionar observação" aria-label="Observação"></td>
       <td><button class="del-x" data-del-act="1" title="Remover atividade">✕</button></td>
     </tr>`;
   }).join('');
@@ -1221,12 +1634,12 @@ function renderActivities(lic){
   <div class="section-label">Atividades / etapas
     <button class="btn" style="padding:5px 10px;font-size:12px;" data-add-act="${esc(lic.id)}">+ Adicionar atividade</button>
   </div>
-  <table class="act-table">
+  <div class="table-scroll"><table class="act-table">
     <thead><tr>${steps.length
       ? '<th style="width:22%">Atividade</th><th style="width:18%">Etapa do fluxo</th><th style="width:13%">Responsável</th><th style="width:13%">Status</th><th style="width:11%">Data</th><th style="width:20%">Observação</th>'
       : '<th style="width:24%">Atividade</th><th style="width:16%">Responsável</th><th style="width:16%">Status</th><th style="width:13%">Data</th><th style="width:25%">Observação</th>'}<th></th></tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function renderFlow(lic){
@@ -1321,8 +1734,11 @@ function renderEvidence(scope, record){
     </div></li>`;
   }).join('');
   return `<section class="evidence-section"><div class="section-label">Comprovantes · OneDrive</div>
-    ${links.length ? `<ul class="evidence-list">${rows}</ul>` : '<p>Nenhum comprovante vinculado.</p>'}
-    <button class="btn" data-evidence-add data-scope="${scope}" data-record="${esc(record.id)}">+ Vincular comprovante</button>
+    ${links.length ? `<ul class="evidence-list">${rows}</ul>` : '<p class="evidence-empty">Nenhum comprovante vinculado.</p>'}
+    <div class="evidence-add">
+      <button class="btn" type="button" data-evidence-add data-scope="${scope}" data-record="${esc(record.id)}">+ Vincular comprovante</button>
+      ${links.length ? '' : '<span class="evidence-help">Cole o link de um arquivo ou pasta do OneDrive.</span>'}
+    </div>
   </section>`;
 }
 
@@ -1352,16 +1768,41 @@ function attachEvidenceEvents(root){
       button.dataset.record, button.hasAttribute('data-evidence-edit') ? Number(button.dataset.evidenceEdit) : null));
   });
   root.querySelectorAll('[data-evidence-delete]').forEach(button=>{
-    button.addEventListener('click', async ()=>{
-      const record = evidenceRecord(button.dataset.scope, button.dataset.record);
-      const index = Number(button.dataset.evidenceDelete);
-      if(!record?.evidenceLinks?.[index]){ showToast('O vínculo não está mais disponível.'); return; }
-      if(!confirm('Remover este vínculo para todos os colaboradores? O arquivo não será excluído do OneDrive.')) return;
-      record.evidenceLinks.splice(index, 1);
-      const saving = saveData();
-      render();
-      showToast(await saving ? 'Vínculo removido' : 'Remoção pendente de sincronização');
+    button.addEventListener('click', ()=>{
+      removeEvidenceLink(button.dataset.scope, button.dataset.record, Number(button.dataset.evidenceDelete));
     });
+  });
+}
+
+/* Remove o vínculo na hora, com Desfazer; o arquivo no OneDrive nunca é apagado. */
+function removeEvidenceLink(scope, id, index){
+  const record = evidenceRecord(scope, id);
+  const link = record?.evidenceLinks?.[index];
+  if(!link){ showToast('O vínculo não está mais disponível.'); return false; }
+  return undoable({
+    apply: ()=>record.evidenceLinks.splice(index, 1),
+    revert: ()=>{
+      record.evidenceLinks = record.evidenceLinks || [];
+      record.evidenceLinks.splice(Math.min(index, record.evidenceLinks.length), 0, link);
+    },
+    message: `Vínculo "${link.name}" removido. O arquivo continua no OneDrive.`,
+    undoneMessage: 'Vínculo restaurado'
+  });
+}
+
+/* Conclui as atividades da etapa atual na hora, com Desfazer. */
+function completeFlowStepUndoable(id, stepId, count){
+  const lic = DATA.find(item=>item.id === id);
+  if(!lic){ showToast('A licença não está mais disponível. Carregue o servidor.'); return false; }
+  const before = JSON.parse(JSON.stringify(lic));
+  return undoable({
+    apply: ()=>completeFlowStep(lic, stepId),
+    revert: ()=>{
+      Object.keys(lic).forEach(key=>delete lic[key]);
+      Object.assign(lic, before);
+    },
+    message: count > 1 ? `${count} atividades da etapa concluídas` : 'Etapa concluída',
+    undoneMessage: 'Conclusão da etapa desfeita'
   });
 }
 
@@ -1401,24 +1842,45 @@ document.getElementById('evidenceForm').addEventListener('submit', async event=>
 --------------------------------------------------------------- */
 function attachCardEvents(){
   document.querySelectorAll('[data-toggle]').forEach(el=>{
-    el.addEventListener('click', ()=>{
+    el.addEventListener('click', async ()=>{
       const id = el.getAttribute('data-toggle');
-      if(expandedIds.has(id)) expandedIds.delete(id); else expandedIds.add(id);
+      if(expandedIds.has(id)){
+        if(licenseEditor?.id === id){
+          if(licenseEditor.dirty && !await askConfirm({
+            message: `Descartar as alterações não salvas da licença ${id}?`, confirmLabel: 'Descartar alterações', danger: true
+          })) return;
+          licenseEditor = null;
+        }
+        expandedIds.delete(id);
+      }else expandedIds.add(id);
       render();
     });
   });
 
-  document.querySelectorAll('.field-grid input, .field-grid select, .field-grid textarea').forEach(el=>{
-    el.addEventListener('click', e=>e.stopPropagation());
-    el.addEventListener('change', ()=>{
-      const lic = DATA.find(l=>l.id===el.dataset.lic);
-      if(!lic) return;
-      lic[el.dataset.field] = el.value;
-      saveData();
-      // light re-render for badges without collapsing focus abruptly
-      render();
-    });
+  /* Campos do editor só alteram o rascunho; a licença muda ao clicar em Salvar. */
+  document.querySelectorAll('[data-editor] [data-field]').forEach(el=>{
+    const update = ()=>{
+      if(licenseEditor?.id !== el.dataset.lic) return;
+      licenseEditor.draft[el.dataset.field] = el.value;
+      licenseEditor.dirty = true;
+    };
+    el.addEventListener('input', update);
+    el.addEventListener('change', update);
   });
+  document.querySelectorAll('[data-editor]').forEach(editor=>editor.addEventListener('keydown', event=>{
+    if(event.key === 'Escape'){
+      event.preventDefault();
+      cancelLicenseEdit();
+    }else if(event.key === 'Enter' && (event.ctrlKey || event.metaKey)){
+      event.preventDefault();
+      void saveLicenseEdit();
+    }
+  }));
+  document.querySelectorAll('[data-edit-lic]').forEach(btn=>btn.addEventListener('click', ()=>{
+    void startLicenseEdit(btn.dataset.editLic);
+  }));
+  document.querySelectorAll('[data-edit-cancel]').forEach(btn=>btn.addEventListener('click', cancelLicenseEdit));
+  document.querySelectorAll('[data-edit-save]').forEach(btn=>btn.addEventListener('click', ()=>{ void saveLicenseEdit(); }));
 
   document.querySelectorAll('.act-table').forEach(t=>t.addEventListener('click', e=>e.stopPropagation()));
 
@@ -1462,9 +1924,7 @@ function attachCardEvents(){
     void runFlowAction(btn.dataset.flowApply, lic=>applyFlow(lic, type), 'Fluxo aplicado');
   }));
   document.querySelectorAll('[data-flow-complete]').forEach(btn=>btn.addEventListener('click', ()=>{
-    const count = Number(btn.dataset.count);
-    if(count > 1 && !confirm(`Marcar as ${count} atividades pendentes desta etapa como concluídas?`)) return;
-    void runFlowAction(btn.dataset.flowComplete, lic=>completeFlowStep(lic, btn.dataset.step), 'Etapa concluída');
+    completeFlowStepUndoable(btn.dataset.flowComplete, btn.dataset.step, Number(btn.dataset.count));
   }));
   document.querySelectorAll('[data-flow-import]').forEach(btn=>btn.addEventListener('click', ()=>{
     void runFlowAction(btn.dataset.flowImport, importSpreadsheetFlow, 'Atividades da planilha importadas');
@@ -1472,16 +1932,25 @@ function attachCardEvents(){
   document.querySelectorAll('[data-flow-decide]').forEach(btn=>btn.addEventListener('click', ()=>{
     void runFlowAction(btn.dataset.flowDecide, lic=>decideFlow(lic, btn.dataset.gate, btn.dataset.option), 'Decisão registrada');
   }));
-  document.querySelectorAll('[data-flow-cycle]').forEach(btn=>btn.addEventListener('click', ()=>{
-    if(!confirm('Iniciar um novo ciclo de renovação? As etapas do fluxo voltam para "Não iniciado"; o histórico é mantido.')) return;
+  document.querySelectorAll('[data-flow-cycle]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    if(!await askConfirm({
+      title: 'Novo ciclo de renovação',
+      message: `Iniciar um novo ciclo de renovação da licença ${btn.dataset.flowCycle}? As etapas do fluxo voltam para "Não iniciado"; o histórico é mantido.`,
+      confirmLabel: 'Iniciar novo ciclo'
+    })) return;
     void runFlowAction(btn.dataset.flowCycle, startFlowCycle, 'Novo ciclo iniciado');
   }));
 
   document.querySelectorAll('[data-del-lic]').forEach(btn=>{
     btn.addEventListener('click', async e=>{
       e.stopPropagation();
-      if(!confirm(`Excluir a licença ${btn.dataset.delLic}${remoteEnabled ? ' para todos os colaboradores' : ''}? Esta ação não pode ser desfeita.`)) return;
+      if(!await askConfirm({
+        title: 'Excluir licença',
+        message: `Excluir a licença ${btn.dataset.delLic}${remoteEnabled ? ' para todos os colaboradores' : ''}? Esta ação não pode ser desfeita.`,
+        confirmLabel: `Excluir ${btn.dataset.delLic}`, danger: true
+      })) return;
       DATA = DATA.filter(l=>l.id!==btn.dataset.delLic);
+      if(licenseEditor?.id === btn.dataset.delLic) licenseEditor = null;
       const saving = saveData();
       render();
       showToast(await saving ? 'Licença excluída' : 'Exclusão pendente de sincronização');
@@ -1493,23 +1962,115 @@ document.getElementById('fUnidade').addEventListener('change', render);
 document.getElementById('fStatus').addEventListener('change', render);
 document.getElementById('fRisco').addEventListener('change', render);
 document.getElementById('fBusca').addEventListener('input', render);
-document.getElementById('btnLicensePanel').addEventListener('click', ()=>navigatePanel('#licenses'));
-document.getElementById('btnUnitPanel').addEventListener('click', ()=>navigatePanel('#units'));
-document.getElementById('btnCalendarPanel').addEventListener('click', ()=>navigatePanel('#calendar'));
-document.getElementById('btnListView').addEventListener('click', ()=>{ activeView='list'; render(); });
-document.getElementById('btnGanttView').addEventListener('click', ()=>{ activeView='gantt'; render(); });
+document.getElementById('fOrdem').addEventListener('change', render);
+
+/* No celular os filtros ficam recolhidos atrás de "Filtros (n)". */
+function updateFilterCount(){
+  const active = ['fUnidade', 'fStatus', 'fRisco', 'fBusca'].filter(id=>document.getElementById(id).value.trim()).length
+    + (quickFilter ? 1 : 0);
+  document.getElementById('btnFilters').textContent = active ? `Filtros (${active})` : 'Filtros';
+}
+
+document.getElementById('btnFilters').addEventListener('click', ()=>{
+  const filters = document.getElementById('dashboardFilters');
+  const open = document.getElementById('btnFilters').getAttribute('aria-expanded') !== 'true';
+  document.getElementById('btnFilters').setAttribute('aria-expanded', String(open));
+  if(open) filters.classList.add('is-open');
+  else filters.classList.remove('is-open');
+});
+VIEW_TABS.forEach(([id, view])=>{
+  document.getElementById(id).addEventListener('click', ()=>navigatePanel(`#view=${view}`));
+});
+/* Setas, Home e End movem entre as abas e já ativam a visão escolhida. */
+document.getElementById('viewTabs').addEventListener('keydown', event=>{
+  const ids = VIEW_TABS.map(([id])=>id);
+  const index = ids.indexOf(document.activeElement?.id);
+  const next = {ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: ids.length - 1}[event.key];
+  if(index < 0 || next === undefined) return;
+  event.preventDefault();
+  const tab = document.getElementById(ids[(next + ids.length) % ids.length]);
+  tab.click();
+  tab.focus();
+});
 document.getElementById('btnClearFilters').addEventListener('click', ()=>{
   document.getElementById('fUnidade').value='';
   document.getElementById('fStatus').value='';
   document.getElementById('fRisco').value='';
   document.getElementById('fBusca').value='';
+  quickFilter = null;
   render();
 });
 
+/* ---------------------------------------------------------------
+   MENU "MAIS" DO CABEÇALHO
+--------------------------------------------------------------- */
+const moreButton = document.getElementById('btnMore');
+const moreMenu = document.getElementById('moreMenu');
+/* Itens ocultos pelo CSS (atalhos só do celular) também ficam fora da navegação por setas. */
+const moreMenuItems = ()=>[...moreMenu.querySelectorAll('[role="menuitem"]')]
+  .filter(item=>!item.hidden && !item.disabled && item.getClientRects().length);
+
+/* No celular, + Nova unidade e Exportar ficam no menu e acionam os botões originais. */
+moreMenu.querySelectorAll('[data-proxy]').forEach(item=>item.addEventListener('click', ()=>{
+  document.getElementById(item.dataset.proxy).click();
+}));
+
+function openMoreMenu(focus = 'first'){
+  document.getElementById('moreMenuDivider').hidden =
+    !['btnSync','btnReloadServer','btnImportLocal'].some(id=>!document.getElementById(id).hidden);
+  moreMenu.hidden = false;
+  moreButton.setAttribute('aria-expanded', 'true');
+  const items = moreMenuItems();
+  (focus === 'last' ? items[items.length - 1] : items[0])?.focus();
+}
+
+function closeMoreMenu(returnFocus = false){
+  if(moreMenu.hidden) return;
+  moreMenu.hidden = true;
+  moreButton.setAttribute('aria-expanded', 'false');
+  if(returnFocus) moreButton.focus();
+}
+
+moreButton.addEventListener('click', ()=>{
+  if(moreMenu.hidden) openMoreMenu();
+  else closeMoreMenu();
+});
+moreButton.addEventListener('keydown', event=>{
+  if(event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  openMoreMenu(event.key === 'ArrowUp' ? 'last' : 'first');
+});
+moreMenu.addEventListener('keydown', event=>{
+  const items = moreMenuItems();
+  const index = items.indexOf(document.activeElement);
+  const move = {ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: items.length - 1}[event.key];
+  if(move !== undefined){
+    event.preventDefault();
+    items[(move + items.length) % items.length]?.focus();
+  }else if(event.key === 'Escape'){
+    event.preventDefault();
+    closeMoreMenu(true);
+  }else if(event.key === 'Tab'){
+    closeMoreMenu();
+  }
+});
+/* Fecha antes de executar o item, para que a ação possa mover o foco (ex.: abrir um modal). */
+moreMenu.addEventListener('click', event=>{
+  if(event.target.closest('[role="menuitem"]')) closeMoreMenu(true);
+}, true);
+document.addEventListener('click', event=>{
+  if(!event.target.closest?.('.menu')) closeMoreMenu();
+});
+
 document.getElementById('btnReset').addEventListener('click', async ()=>{
-  if(!confirm(remoteEnabled
-    ? 'Restaurar licenças e unidades originais para TODOS os colaboradores? As alterações da base central e unidades personalizadas serão substituídas.'
-    : 'Restaurar licenças e unidades originais da planilha? Todas as edições e unidades personalizadas deste navegador serão perdidas.')) return;
+  if(!await askConfirm({
+    title: 'Restaurar dados originais',
+    message: remoteEnabled
+      ? 'Restaurar licenças e unidades originais para TODOS os colaboradores? As alterações da base central e unidades personalizadas serão substituídas.'
+      : 'Restaurar licenças e unidades originais da planilha? Todas as edições e unidades personalizadas deste navegador serão perdidas.',
+    confirmLabel: 'Restaurar dados', danger: true
+  })) return;
+  discardPendingUndo();
   DATA = JSON.parse(JSON.stringify(DEFAULT_DATA));
   MODEL = null;
   const saved = await saveData();
@@ -1517,13 +2078,24 @@ document.getElementById('btnReset').addEventListener('click', async ()=>{
   showToast(saved ? 'Dados originais restaurados' : 'Restauração pendente de sincronização');
 });
 
+document.getElementById('btnSyncNow').addEventListener('click', ()=>{
+  if(syncBannerAction) document.getElementById(syncBannerAction).click();
+});
+
 document.getElementById('btnSync').addEventListener('click', async ()=>{
-  if(pendingChanges) await saveData();
+  const committing = commitPendingUndo();
+  if(committing) await committing;
+  else if(pendingChanges) await saveData();
   else await refreshFromServer();
 });
 
 document.getElementById('btnReloadServer').addEventListener('click', async ()=>{
-  if(pendingChanges && !confirm('Descartar as alterações pendentes deste navegador e carregar a base central? Exporte o relatório antes, se precisar preservá-las.')) return;
+  if((pendingChanges || pendingUndo) && !await askConfirm({
+    title: 'Descartar alterações pendentes',
+    message: 'Descartar as alterações pendentes deste navegador e carregar a base central? Exporte o relatório antes, se precisar preservá-las.',
+    confirmLabel: 'Descartar e carregar servidor', danger: true
+  })) return;
+  discardPendingUndo();
   await refreshFromServer(true);
 });
 
@@ -1536,8 +2108,13 @@ document.getElementById('btnImportLocal').addEventListener('click', async ()=>{
     if(!isStructuredModel(stored) && !Array.isArray(stored)){
       throw new Error('Os dados locais não têm um formato válido.');
     }
-    if(!confirm('Substituir a base central pelos dados antigos deste navegador? Isso afetará todos os colaboradores da organização.')) return;
-    MODEL = isStructuredModel(stored) ? applyReferenceData(stored) : modelFromLegacyData(stored);
+    if(!await askConfirm({
+      title: 'Importar dados locais',
+      message: 'Substituir a base central pelos dados antigos deste navegador? Isso afetará todos os colaboradores da organização.',
+      confirmLabel: 'Substituir base central', danger: true
+    })) return;
+    discardPendingUndo();
+    MODEL =isStructuredModel(stored) ? applyReferenceData(stored) : modelFromLegacyData(stored);
     DATA = flattenModel(MODEL);
     const saved = await saveData();
     render();
@@ -1632,10 +2209,62 @@ function openNewLicense(unitId = ''){
     .sort((a,b)=>a.nome.localeCompare(b.nome))
     .map(unit=>`<option value="${esc(unit.id)}">${esc(unit.nome)} — ${esc(unit.cidade)}/${esc(unit.uf)}</option>`).join('');
   select.value = unitId;
+  const idInput = document.getElementById('nl_id');
+  idInput.value = nextLicenseId();
+  idInput.readOnly = true;
+  document.getElementById('btnEditNewLicId').hidden = false;
+  showNewLicenseErrors([]);
   fillNewLicenseUnit();
   suggestNewLicenseFlow();
   openModal('overlayNewLic');
 }
+
+/* Próximo L-NNN livre, a partir do maior número já usado. */
+function nextLicenseId(){
+  const numbers = DATA.map(lic=>/^L-(\d+)$/.exec(lic.id || '')).filter(Boolean).map(match=>Number(match[1]));
+  return `L-${String(Math.max(0, ...numbers) + 1).padStart(3, '0')}`;
+}
+
+const NEW_LICENSE_FIELDS = ['nl_id', 'nl_unidade', 'nl_orgao', 'nl_tipo', 'nl_status'];
+
+function validateNewLicense(){
+  const value = id=>document.getElementById(id).value.trim();
+  const errors = [];
+  const id = value('nl_id');
+  if(!id) errors.push(['nl_id', 'Informe um ID para a licença.']);
+  else if(DATA.some(lic=>lic.id === id)) errors.push(['nl_id', `Já existe uma licença com o ID ${id}.`]);
+  if(!MODEL.units.some(unit=>unit.id === value('nl_unidade'))) errors.push(['nl_unidade', 'Selecione uma unidade cadastrada.']);
+  if(!value('nl_tipo')) errors.push(['nl_tipo', 'Informe o tipo de licença.']);
+  if(!value('nl_orgao')) errors.push(['nl_orgao', 'Informe o órgão emissor.']);
+  if(!LICENSE_STATUSES.includes(value('nl_status'))) errors.push(['nl_status', 'Selecione o status.']);
+  return errors;
+}
+
+/* Mensagem inline e aria-invalid nos campos com problema; o foco vai para o primeiro. */
+function showNewLicenseErrors(errors){
+  const box = document.getElementById('newLicError');
+  const invalid = new Set(errors.map(([id])=>id));
+  NEW_LICENSE_FIELDS.forEach(id=>{
+    const field = document.getElementById(id);
+    if(invalid.has(id)) field.setAttribute('aria-invalid', 'true');
+    else field.removeAttribute('aria-invalid');
+  });
+  box.textContent = errors.map(([, message])=>message).join(' ');
+  box.hidden = !errors.length;
+  if(errors.length){
+    const first = document.getElementById(errors[0][0]);
+    if(first.id === 'nl_id') first.readOnly = false;
+    first.focus();
+  }
+}
+
+document.getElementById('btnEditNewLicId').addEventListener('click', ()=>{
+  const input = document.getElementById('nl_id');
+  input.readOnly = false;
+  document.getElementById('btnEditNewLicId').hidden = true;
+  input.focus();
+  input.select?.();
+});
 
 function suggestNewLicenseFlow(){
   document.getElementById('nl_fluxo').value = suggestedFlowType({
@@ -1649,11 +2278,11 @@ document.getElementById('nl_categoria').addEventListener('change', suggestNewLic
 document.getElementById('nl_tipo').addEventListener('change', suggestNewLicenseFlow);
 document.getElementById('btnNewLic').addEventListener('click', ()=>openNewLicense());
 document.getElementById('btnSaveNewLic').addEventListener('click', async ()=>{
+  const errors = validateNewLicense();
+  showNewLicenseErrors(errors);
+  if(errors.length) return;
   const id = document.getElementById('nl_id').value.trim();
-  if(!id){ showToast('Informe um ID para a licença'); return; }
-  if(DATA.some(l=>l.id===id)){ showToast('Já existe uma licença com esse ID'); return; }
   const unit = MODEL.units.find(item=>item.id === document.getElementById('nl_unidade').value);
-  if(!unit){ showToast('Selecione uma unidade cadastrada'); return; }
   const lic = {
     id,
     unidadeId: unit.id,
@@ -1742,7 +2371,12 @@ document.getElementById('authForm').addEventListener('submit', async event=>{
 });
 
 document.getElementById('btnSignOut').addEventListener('click', async ()=>{
-  if(pendingChanges && !confirm('Há alterações não sincronizadas. Elas permanecerão como rascunho neste navegador. Deseja sair?')) return;
+  commitPendingUndo();
+  if(pendingChanges && !await askConfirm({
+    title: 'Sair com alterações pendentes',
+    message: 'Há alterações não sincronizadas. Elas permanecerão como rascunho neste navegador. Deseja sair?',
+    confirmLabel: 'Sair mesmo assim'
+  })) return;
   try{
     await saveQueue;
     await window.LicenseDataService.auth.signOut();
@@ -1867,22 +2501,24 @@ function buildAndPrintReport(){
 function setAppReady(ready){
   appReady = ready;
   document.querySelector('main').inert = !ready;
-  ['btnNewLic', 'btnNewUnit', 'btnReset', 'btnExport', 'btnSync', 'btnReloadServer', 'btnImportLocal']
+  ['btnNewLic', 'btnNewUnit', 'btnReset', 'btnExport', 'btnSync', 'btnReloadServer', 'btnImportLocal', 'menuNewUnit', 'menuExport']
     .forEach(id=>document.getElementById(id).disabled = !ready);
   ['btnSync', 'btnReloadServer', 'btnImportLocal']
     .forEach(id=>document.getElementById(id).hidden = !remoteEnabled);
 }
 
 function refreshWhenIdle(){
-  if(document.hidden || document.activeElement?.matches('input, textarea, select')
-    || document.querySelector('#overlayNewLic.show, #overlayUnit.show, #overlayEvidence.show')) return;
+  if(document.hidden || licenseEditor?.dirty || pendingUndo || document.activeElement?.matches('input, textarea, select')
+    || document.querySelector('#overlayNewLic.show, #overlayUnit.show, #overlayEvidence.show, #overlayConfirm.show')) return;
   void refreshFromServer();
 }
 
 window.addEventListener('focus', refreshWhenIdle);
 window.addEventListener('online', refreshWhenIdle);
 window.addEventListener('beforeunload', event=>{
-  if(!pendingChanges) return;
+  /* Guarda como rascunho local (gravação síncrona) a ação que aguardava o Desfazer. */
+  commitPendingUndo();
+  if(!pendingChanges && !licenseEditor?.dirty) return;
   event.preventDefault();
   event.returnValue = '';
 });
