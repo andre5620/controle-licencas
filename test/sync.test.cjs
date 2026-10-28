@@ -1329,3 +1329,75 @@ test('controle de etapas das unidades nao publica nomes de pessoas', ()=>{
   const text = JSON.stringify(window.SPREADSHEET_REFERENCE.unitFlows);
   assert.doesNotMatch(text, /André|Carolina|Mirian|Enrique/);
 });
+
+test('datas de inicio e fim e subatividades persistem no modelo', async ()=>{
+  let stored;
+  const app = createApp({service: {save: async model=>{ stored = structuredClone(model); return 3; }}});
+  await app.run('loadData()');
+  app.run(`MODEL = modelFromLegacyData([window.DEFAULT_DATA[0]]); DATA = flattenModel(MODEL);
+    DATA[0].activities = [{name:'Vistoria', status:'Não iniciado', dataInicio:'2026-01-10', dataFim:'2026-02-10',
+    subatividades:[{id:'S-1', name:'Agendar', status:'Done', dataInicio:'2026-01-10', dataFim:'2026-01-20'}]}];`);
+  assert.equal(await app.run('saveData()'), true);
+  const activity = stored.processes[0].activities[0];
+  assert.equal(activity.dataInicio, '2026-01-10');
+  assert.equal(activity.dataFim, '2026-02-10');
+  assert.equal(activity.subatividades[0].name, 'Agendar');
+  assert.equal(app.run('flattenModel(MODEL)[0].activities[0].subatividades[0].dataFim'), '2026-01-20');
+});
+
+test('atividade ou subatividade com data fim vencida e nao concluida fica fora do prazo', ()=>{
+  const app = createApp();
+  app.run(`var day = n=>addDaysIso(todayStr(), n);`);
+  assert.equal(app.run("activityLateDays({status:'Working on it', dataFim: day(-1)})"), 1);
+  assert.equal(app.run("activityLateDays({status:'Done', dataFim: day(-1)})"), 0);
+  assert.equal(app.run("activityLateDays({status:'N/A', dataFim: day(-5)})"), 0);
+  assert.equal(app.run("activityLateDays({status:'Stuck', dataFim: day(0)})"), 0);
+  assert.equal(app.run("activityLateDays({status:'Stuck'})"), 0);
+  app.run(`var lic = {id:'L-9', unidade:'U', status:'Pendente', activities:[
+    {name:'<b>X</b>', status:'Working on it', dataFim: day(-3), subatividades:[
+      {name:'<i>Sub</i>', status:'Não iniciado', dataFim: day(-2)}, {name:'Ok', status:'Done', dataFim: day(-2)}]},
+    {name:'Em dia', status:'Working on it', dataFim: day(4)}]};`);
+  assert.equal(app.run('lateActivities(lic).length'), 2);
+  const card = app.run('renderCard(lic)');
+  assert.match(card, /⚠ 2 atividades fora do prazo/);
+  app.run("lic.activities[0].subatividades[0].status = 'Done';");
+  assert.match(app.run('renderCard(lic)'), /⚠ 1 atividade fora do prazo/);
+  app.run("expandedActivities.add(activityKey(lic, lic.activities[0], 0)); lic.activities[0].subatividades[0].status = 'Stuck';");
+  const table = app.run('renderActivities(lic)');
+  assert.match(table, /Atrasada há 3 dias/);
+  assert.match(table, /Atrasada há 2 dias/);
+  assert.match(table, /data-af="dataInicio"/);
+  assert.match(table, /Subatividades 1\/2/);
+  assert.match(table, /disabled title="Status calculado pelas subatividades"/);
+  assert.doesNotMatch(table, /<b>X<\/b>|<i>Sub<\/i>/);
+  assert.match(table, /&lt;i&gt;Sub&lt;\/i&gt;/);
+});
+
+test('status da atividade e calculado pelas subatividades e nao aceita fim antes do inicio', ()=>{
+  const app = createApp();
+  app.run(`var a = {name:'A', status:'Não iniciado', subatividades:[{status:'Done'},{status:'Não iniciado'}]};`);
+  assert.equal(app.run('deriveActivityStatus(a)'), 'Working on it');
+  app.run("a.subatividades[1].status = 'Stuck';");
+  assert.equal(app.run('deriveActivityStatus(a)'), 'Stuck');
+  app.run("a.subatividades[1].status = 'N/A';");
+  assert.equal(app.run('deriveActivityStatus(a)'), 'Done');
+  assert.equal(app.run('a.dataRealizada'), app.run('todayStr()'));
+  app.run("a.subatividades.forEach(sub=>sub.status = 'Não iniciado');");
+  assert.equal(app.run('deriveActivityStatus(a)'), 'Não iniciado');
+  assert.equal(app.run('a.dataRealizada'), '');
+  assert.equal(app.run("deriveActivityStatus({status:'Stuck'})"), 'Stuck');
+  assert.match(app.run("dateRangeError({dataInicio:'2026-03-10'}, 'dataFim', '2026-03-01')"), /não pode ser anterior/);
+  assert.equal(app.run("dateRangeError({dataFim:'2026-03-10'}, 'dataInicio', '2026-03-01')"), '');
+  assert.equal(app.run("nextSubId({id:'EP-1', subatividades:[{id:'EP-1-S01'}]}, {id:'L'}, 0)"), 'EP-1-S02');
+});
+
+test('concluir a etapa conclui as subatividades e o novo ciclo as reabre', ()=>{
+  const app = createApp({withFlows: true});
+  app.run(`var lic = ${flowLicense()}; applyFlow(lic, 'licenca');
+    flowActivity(lic, 'LIC-01').subatividades = [{name:'Parte 1', status:'Não iniciado'}, {name:'Parte 2', status:'Done'}];`);
+  app.run("completeFlowStep(lic, 'LIC-01')");
+  assert.equal(app.run("flowActivity(lic, 'LIC-01').subatividades.every(sub=>sub.status === 'Done')"), true);
+  assert.equal(app.run("deriveActivityStatus(flowActivity(lic, 'LIC-01'))"), 'Done');
+  app.run("resetFlowActivity(flowActivity(lic, 'LIC-01'))");
+  assert.equal(app.run("flowActivity(lic, 'LIC-01').subatividades.every(sub=>sub.status === 'Não iniciado')"), true);
+});

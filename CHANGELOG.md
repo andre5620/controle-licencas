@@ -2,6 +2,16 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.14.0] - 2026-10-28
+
+### Prazos e subatividades nas atividades da licença
+
+- Colunas **Início** e **Fim** na tabela de atividades, ao lado da coluna **Data**; a data fim não pode ser anterior à de início.
+- Alerta de atividade fora do prazo: linha em destaque com o selo "⚠ Atrasada há X dias" e, no cabeçalho do card, "⚠ N atividades fora do prazo", visível com o card fechado.
+- Subatividades dentro de cada atividade (nome, responsável, status, início e fim), com progresso "2/5"; o status da atividade passa a ser calculado pelas subatividades e alimenta o fluxograma.
+- "Concluir etapa" também conclui as subatividades pendentes, e "Iniciar novo ciclo" as reabre.
+- Relatório com início, fim, subatividades e as atividades fora do prazo.
+
 ## [1.13.0] - 2026-10-21
 
 ### Melhorias de usabilidade
