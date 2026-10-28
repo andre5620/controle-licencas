@@ -4,7 +4,7 @@ const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 const PROCESS_FLOWS = window.PROCESS_FLOWS || {};
 
-const APP_VERSION = '1.13.0';
+const APP_VERSION = '1.14.0';
 const LICENSE_STATUSES = ['Pendente','Em análise','Condicionada','Obtida','Dispensada','Indeferida','Não aplicável'];
 const OPEN_STATUSES = ['Pendente','Em análise','Condicionada','Indeferida'];
 const ACTIVITY_STATUSES = ['Não iniciado','Working on it','Stuck','Done','N/A'];
@@ -19,6 +19,7 @@ const STORAGE_KEY = 'licencas-solinftec-v1';
 let MODEL = null;
 let DATA = [];
 let expandedIds = new Set();
+let expandedActivities = new Set();
 let activeView = 'list';
 let activePanel = 'unit';
 const remoteEnabled = Boolean(window.SUPABASE_CONFIG?.required || window.LicenseDataService?.enabled);
@@ -411,6 +412,7 @@ function importSpreadsheetFlow(lic){
 
 function resetFlowActivity(activity){
   Object.assign(activity, {status: 'Não iniciado', dataRealizada: ''});
+  (activity.subatividades || []).forEach(sub=>Object.assign(sub, {status: 'Não iniciado', dataRealizada: ''}));
   if(activity.puladaPeloFluxo){
     activity.observacao = '';
     delete activity.puladaPeloFluxo;
@@ -454,6 +456,10 @@ function completeFlowStep(lic, stepId){
   flowActivities(lic, node.id).filter(activity=>!STEP_DONE.includes(activity.status)).forEach(activity=>{
     activity.status = 'Done';
     activity.dataRealizada = todayStr();
+    (activity.subatividades || []).filter(sub=>!STEP_DONE.includes(sub.status)).forEach(sub=>{
+      sub.status = 'Done';
+      sub.dataRealizada = todayStr();
+    });
   });
   syncFlowStatus(lic, stepId);
 }
@@ -883,6 +889,61 @@ function actStatusClass(status){
   if(s==='working on it') return 'st-working';
   if(s==='stuck') return 'st-stuck';
   return 'st-nao';
+}
+
+/* Dias de atraso de uma atividade ou subatividade: Data fim no passado e ainda não concluída. */
+function activityLateDays(item){
+  if(!item?.dataFim || STEP_DONE.includes(item.status)) return 0;
+  const days = daysUntil(item.dataFim);
+  return days < 0 ? -days : 0;
+}
+
+function lateActivities(lic){
+  const late = [];
+  (lic.activities || []).forEach(activity=>{
+    const days = activityLateDays(activity);
+    if(days) late.push({activity, days});
+    (activity.subatividades || []).forEach(sub=>{
+      const subDays = activityLateDays(sub);
+      if(subDays) late.push({activity, sub, days: subDays});
+    });
+  });
+  return late;
+}
+
+function lateBadge(item){
+  const days = activityLateDays(item);
+  return days ? `<span class="act-alert" role="img" aria-label="Fora do prazo: atrasada há ${esc(humanSpan(days))}" title="Data fim: ${esc(fmtDate(item.dataFim))}">⚠ Atrasada há ${esc(humanSpan(days))}</span>` : '';
+}
+
+/* Com subatividades, o status da atividade é calculado: só conclui quando todas estão concluídas. */
+function deriveActivityStatus(activity){
+  const subs = activity.subatividades || [];
+  if(!subs.length) return activity.status;
+  let status;
+  if(subs.every(sub=>STEP_DONE.includes(sub.status))) status = subs.every(sub=>sub.status === 'N/A') ? 'N/A' : 'Done';
+  else if(subs.some(sub=>sub.status === 'Stuck')) status = 'Stuck';
+  else if(subs.some(sub=>sub.status !== 'Não iniciado')) status = 'Working on it';
+  else status = 'Não iniciado';
+  activity.status = status;
+  activity.dataRealizada = STEP_DONE.includes(status) ? (activity.dataRealizada || todayStr()) : '';
+  return status;
+}
+
+function nextSubId(activity, lic, idx){
+  const base = activity.id || `${lic.id}-A${idx + 1}`;
+  const used = new Set((activity.subatividades || []).map(sub=>sub.id));
+  let n = (activity.subatividades || []).length + 1;
+  let id;
+  do id = `${base}-S${String(n++).padStart(2,'0')}`; while(used.has(id));
+  return id;
+}
+
+/* Data fim não pode ser anterior à data de início. */
+function dateRangeError(item, field, value){
+  const inicio = field === 'dataInicio' ? value : item.dataInicio;
+  const fim = field === 'dataFim' ? value : item.dataFim;
+  return inicio && fim && fim < inicio ? 'A data fim não pode ser anterior à data de início.' : '';
 }
 
 /* ---------------------------------------------------------------
@@ -1440,6 +1501,8 @@ function renderCard(lic){
   const open = expandedIds.has(lic.id);
   const venc = vencimentoBadge(lic.vencimento);
   const doneCount = lic.activities.filter(a=>a.status==='Done').length;
+  const late = lateActivities(lic);
+  const lateTitle = late.map(item=>item.sub ? `${item.activity.name} › ${item.sub.name}` : item.activity.name).join('\n');
   return `
   <div class="lic-card ${open?'open':''}" data-id="${esc(lic.id)}">
     <div class="lic-head" data-toggle="${esc(lic.id)}">
@@ -1453,6 +1516,7 @@ function renderCard(lic){
         <span class="badge ${statusBadgeClass(lic.status)}">${esc(lic.status||'—')}</span>
         <span class="badge ${riscoBadgeClass(lic.risco)}">Risco ${esc(lic.risco||'NA')}</span>
         ${venc?`<span class="badge ${venc.cls}" title="${esc(venc.title)}">${esc(venc.txt)}</span>`:''}
+        ${late.length ? `<span class="badge badge-late" title="${esc(lateTitle)}">⚠ ${late.length} ${late.length === 1 ? 'atividade fora do prazo' : 'atividades fora do prazo'}</span>` : ''}
       </div>
     </div>
     <div class="lic-body">
@@ -1607,28 +1671,60 @@ function flowStepOptions(lic){
   ];
 }
 
+function activityKey(lic, activity, index){
+  return `${lic.id}:${activity.id || index}`;
+}
+
 function renderActivities(lic){
   const steps = flowStepOptions(lic);
+  const columns = steps.length ? 9 : 8;
   const rows = lic.activities.map((a,i)=>{
     const overdue = a.date && daysUntil(a.date)<0 && a.status!=='Done';
     const linked = steps.some(node=>node.id === a.etapaPadraoId);
+    const subs = a.subatividades || [];
+    const subsDone = subs.filter(sub=>STEP_DONE.includes(sub.status)).length;
+    const key = activityKey(lic, a, i);
+    const subsOpen = expandedActivities.has(key);
     const stepCell = steps.length ? `<td><select data-af="etapaPadraoId" class="act-step" aria-label="Etapa do fluxo">
         <option value="" ${linked ? '' : 'selected'}>— sem etapa —</option>
         ${steps.map(node=>`<option value="${esc(node.id)}" ${node.id === a.etapaPadraoId ? 'selected' : ''}>${esc(node.nome)}</option>`).join('')}
       </select></td>` : '';
+    const subRows = subs.map((sub, j)=>`
+          <tr data-sub-idx="${j}" class="${activityLateDays(sub) ? 'act-late' : ''}">
+            <td><input data-sf="name" value="${esc(sub.name)}" aria-label="Subatividade">${lateBadge(sub)}</td>
+            <td><input data-sf="owner" value="${esc(sub.owner||'')}" placeholder="Definir responsável" aria-label="Responsável da subatividade"></td>
+            <td><select data-sf="status" class="act-status ${actStatusClass(sub.status)}" aria-label="Status da subatividade">
+              ${ACTIVITY_STATUSES.map(s=>`<option ${s===sub.status?'selected':''}>${s}</option>`).join('')}
+            </select></td>
+            <td><input type="date" data-sf="dataInicio" value="${esc(sub.dataInicio||'')}" aria-label="Data início da subatividade"></td>
+            <td><input type="date" data-sf="dataFim" value="${esc(sub.dataFim||'')}" class="${activityLateDays(sub)?'act-overdue':''}" aria-label="Data fim da subatividade"></td>
+            <td><button class="del-x" data-del-sub="1" title="Remover subatividade" aria-label="Remover subatividade">✕</button></td>
+          </tr>`).join('');
+    const subSection = subsOpen ? `
+    <tr class="sub-row" data-lic="${esc(lic.id)}" data-parent="${i}"><td colspan="${columns}">
+      <table class="sub-table" aria-label="Subatividades de ${esc(a.name)}">
+        <thead><tr><th scope="col" style="width:30%">Subatividade</th><th scope="col" style="width:20%">Responsável</th><th scope="col" style="width:17%">Status</th><th scope="col" style="width:15%">Início</th><th scope="col" style="width:15%">Fim</th><th></th></tr></thead>
+        <tbody>${subRows || `<tr><td colspan="6" class="sub-empty">Nenhuma subatividade. Com subatividades, o status da atividade passa a ser calculado por elas.</td></tr>`}</tbody>
+      </table>
+      <button class="btn sub-add" data-add-sub="1">+ Adicionar subatividade</button>
+    </td></tr>` : '';
     return `
-    <tr data-lic="${esc(lic.id)}" data-idx="${i}">
-      <td><input data-af="name" value="${esc(a.name)}" aria-label="Atividade"></td>${stepCell}
+    <tr class="act-row ${activityLateDays(a) ? 'act-late' : ''}" data-lic="${esc(lic.id)}" data-idx="${i}">
+      <td><input data-af="name" value="${esc(a.name)}" aria-label="Atividade">
+        <button type="button" class="sub-toggle" data-sub-toggle="${esc(key)}" aria-expanded="${subsOpen}">${subsOpen ? '▾' : '▸'} ${subs.length ? `Subatividades ${subsDone}/${subs.length}` : 'Subatividades'}</button>
+        ${lateBadge(a)}</td>${stepCell}
       <td><input data-af="owner" value="${esc(a.owner||'')}" placeholder="Definir responsável" aria-label="Responsável"></td>
       <td>
-        <select data-af="status" class="act-status ${actStatusClass(a.status)}">
+        <select data-af="status" class="act-status ${actStatusClass(a.status)}" aria-label="Status"${subs.length ? ' disabled title="Status calculado pelas subatividades"' : ''}>
           ${ACTIVITY_STATUSES.map(s=>`<option ${s===a.status?'selected':''}>${s}</option>`).join('')}
         </select>
       </td>
-      <td><input type="date" data-af="date" value="${esc(a.date||'')}" class="${overdue?'act-overdue':''}"></td>
+      <td><input type="date" data-af="date" value="${esc(a.date||'')}" class="${overdue?'act-overdue':''}" aria-label="Data"></td>
+      <td><input type="date" data-af="dataInicio" value="${esc(a.dataInicio||'')}" aria-label="Data início"></td>
+      <td><input type="date" data-af="dataFim" value="${esc(a.dataFim||'')}" class="${activityLateDays(a)?'act-overdue':''}" aria-label="Data fim"></td>
       <td><input data-af="observacao" value="${esc(a.observacao||'')}" placeholder="Adicionar observação" aria-label="Observação"></td>
       <td><button class="del-x" data-del-act="1" title="Remover atividade">✕</button></td>
-    </tr>`;
+    </tr>${subSection}`;
   }).join('');
   return `
   <div class="section-label">Atividades / etapas
@@ -1636,8 +1732,8 @@ function renderActivities(lic){
   </div>
   <div class="table-scroll"><table class="act-table">
     <thead><tr>${steps.length
-      ? '<th style="width:22%">Atividade</th><th style="width:18%">Etapa do fluxo</th><th style="width:13%">Responsável</th><th style="width:13%">Status</th><th style="width:11%">Data</th><th style="width:20%">Observação</th>'
-      : '<th style="width:24%">Atividade</th><th style="width:16%">Responsável</th><th style="width:16%">Status</th><th style="width:13%">Data</th><th style="width:25%">Observação</th>'}<th></th></tr></thead>
+      ? '<th style="width:19%">Atividade</th><th style="width:14%">Etapa do fluxo</th><th style="width:11%">Responsável</th><th style="width:11%">Status</th><th style="width:10%">Data</th><th style="width:10%">Início</th><th style="width:10%">Fim</th><th style="width:15%">Observação</th>'
+      : '<th style="width:21%">Atividade</th><th style="width:13%">Responsável</th><th style="width:13%">Status</th><th style="width:11%">Data</th><th style="width:11%">Início</th><th style="width:11%">Fim</th><th style="width:20%">Observação</th>'}<th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }
@@ -1884,13 +1980,23 @@ function attachCardEvents(){
 
   document.querySelectorAll('.act-table').forEach(t=>t.addEventListener('click', e=>e.stopPropagation()));
 
-  document.querySelectorAll('.act-table tbody tr').forEach(tr=>{
+  document.querySelectorAll('.act-table tbody tr.act-row').forEach(tr=>{
     const lic = DATA.find(l=>l.id===tr.dataset.lic);
     const idx = +tr.dataset.idx;
     tr.querySelectorAll('[data-af]').forEach(el=>{
       el.addEventListener('change', ()=>{
         const before = currentFlowNodeId(lic);
         const activity = lic.activities[idx];
+        if(el.dataset.af === 'status' && (activity.subatividades || []).length){
+          el.value = activity.status;
+          return;
+        }
+        const rangeError = dateRangeError(activity, el.dataset.af, el.value);
+        if(rangeError){
+          el.value = activity[el.dataset.af] || '';
+          showToast(rangeError);
+          return;
+        }
         activity[el.dataset.af] = el.value;
         if(el.dataset.af === 'status'){
           activity.dataRealizada = STEP_DONE.includes(el.value) ? (activity.dataRealizada || todayStr()) : '';
@@ -1908,11 +2014,60 @@ function attachCardEvents(){
     });
   });
 
+  document.querySelectorAll('[data-sub-toggle]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const key = btn.dataset.subToggle;
+    if(expandedActivities.has(key)) expandedActivities.delete(key);
+    else expandedActivities.add(key);
+    render();
+  }));
+
+  document.querySelectorAll('.act-table tr.sub-row').forEach(row=>{
+    const lic = DATA.find(l=>l.id===row.dataset.lic);
+    const activity = lic?.activities[+row.dataset.parent];
+    if(!activity) return;
+    /* Toda mudança em subatividade recalcula a atividade e pode avançar o fluxograma. */
+    const commit = message=>{
+      const before = currentFlowNodeId(lic);
+      deriveActivityStatus(activity);
+      syncFlowStatus(lic, before);
+      const saving = saveData();
+      render();
+      if(message) saving.then(ok=>showToast(ok ? message : `${message} (pendente de sincronização)`));
+    };
+    row.querySelector('[data-add-sub]').addEventListener('click', ()=>{
+      activity.subatividades = activity.subatividades || [];
+      activity.subatividades.push({id: nextSubId(activity, lic, +row.dataset.parent), name: 'Nova subatividade',
+        owner: '', status: 'Não iniciado', dataInicio: '', dataFim: '', dataRealizada: ''});
+      commit('Subatividade adicionada');
+    });
+    row.querySelectorAll('tr[data-sub-idx]').forEach(subRow=>{
+      const sub = activity.subatividades[+subRow.dataset.subIdx];
+      subRow.querySelectorAll('[data-sf]').forEach(el=>el.addEventListener('change', ()=>{
+        const field = el.dataset.sf;
+        const rangeError = dateRangeError(sub, field, el.value);
+        if(rangeError){
+          el.value = sub[field] || '';
+          showToast(rangeError);
+          return;
+        }
+        sub[field] = el.value;
+        if(field === 'status') sub.dataRealizada = STEP_DONE.includes(el.value) ? (sub.dataRealizada || todayStr()) : '';
+        commit();
+      }));
+      subRow.querySelector('[data-del-sub]').addEventListener('click', async ()=>{
+        if(!await askConfirm({title: 'Remover subatividade', message: `Remover a subatividade "${sub.name}"?`,
+          confirmLabel: 'Remover subatividade', danger: true})) return;
+        activity.subatividades.splice(activity.subatividades.indexOf(sub), 1);
+        commit('Subatividade removida');
+      });
+    });
+  });
+
   document.querySelectorAll('[data-add-act]').forEach(btn=>{
     btn.addEventListener('click', async e=>{
       e.stopPropagation();
       const lic = DATA.find(l=>l.id===btn.dataset.addAct);
-      lic.activities.push({name:'Nova atividade', owner:'', status:'Não iniciado', date:'', observacao:''});
+      lic.activities.push({name:'Nova atividade', owner:'', status:'Não iniciado', date:'', dataInicio:'', dataFim:'', observacao:'', subatividades:[]});
       const saving = saveData();
       render();
       showToast(await saving ? 'Atividade adicionada' : 'Atividade pendente de sincronização');
@@ -2398,16 +2553,23 @@ function buildAndPrintReport(){
   const doneActivities = list.reduce((sum,l)=>sum+(l.activities||[]).filter(a=>a.status==='Done').length,0);
   const stuckActs = [];
   list.forEach(l=>(l.activities||[]).forEach(a=>{
-    if(a.status==='Stuck' || (a.date && daysUntil(a.date)<0 && a.status!=='Done')){
+    if(a.status==='Stuck' || (a.date && daysUntil(a.date)<0 && a.status!=='Done') || activityLateDays(a)){
       stuckActs.push({lic:l.id, unidade:l.unidade, ...a});
     }
+    (a.subatividades||[]).forEach(sub=>{
+      if(sub.status==='Stuck' || activityLateDays(sub)){
+        stuckActs.push({lic:l.id, unidade:l.unidade, ...sub, name:`${a.name} › ${sub.name}`, observacao:''});
+      }
+    });
   }));
 
   const value = (text) => esc(text || 'Não informado');
+  const dateValue = (iso) => iso ? fmtDate(iso) : '—';
   const rows = (arr, mapper) => arr.map(mapper).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">Nenhum registro</td></tr>';
   const activityRows = (lic) => (lic.activities||[]).map(a=>`
-    <tr><td>${value(a.name)}</td><td>${value(a.owner)}</td><td>${value(a.status)}</td><td>${a.date?fmtDate(a.date):'Não informado'}</td><td>${value(a.observacao)}</td></tr>
-  `).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">Nenhuma atividade cadastrada</td></tr>';
+    <tr><td>${value(a.name)}${activityLateDays(a) ? ' <b class="rep-late">(fora do prazo)</b>' : ''}</td><td>${value(a.owner)}</td><td>${value(a.status)}</td><td>${a.date?fmtDate(a.date):'Não informado'}</td><td>${dateValue(a.dataInicio)}</td><td>${dateValue(a.dataFim)}</td><td>${value(a.observacao)}</td></tr>
+    ${(a.subatividades||[]).map(sub=>`<tr class="rep-sub"><td>↳ ${value(sub.name)}${activityLateDays(sub) ? ' <b class="rep-late">(fora do prazo)</b>' : ''}</td><td>${value(sub.owner)}</td><td>${value(sub.status)}</td><td>—</td><td>${dateValue(sub.dataInicio)}</td><td>${dateValue(sub.dataFim)}</td><td></td></tr>`).join('')}
+  `).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">Nenhuma atividade cadastrada</td></tr>';
   const licenseDetails = list.map((lic, index)=>`
     <section class="rep-license ${index ? 'rep-license-break' : ''}">
       <div class="rep-license-header">
@@ -2432,7 +2594,7 @@ function buildAndPrintReport(){
       </div>
       <div class="rep-subtitle">Atividades / etapas (${(lic.activities||[]).length})</div>
       <table class="rep-table rep-activities-table">
-        <thead><tr><th>Atividade</th><th>Responsável</th><th>Status</th><th>Data</th><th>Observação</th></tr></thead>
+        <thead><tr><th>Atividade</th><th>Responsável</th><th>Status</th><th>Data</th><th>Início</th><th>Fim</th><th>Observação</th></tr></thead>
         <tbody>${activityRows(lic)}</tbody>
       </table>
     </section>

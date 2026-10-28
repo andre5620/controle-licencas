@@ -47,6 +47,13 @@ Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e d
 
 Ao expandir uma licenca, os dados aparecem em modo leitura. Clique em **Editar licenca** para alterar; as mudancas so valem ao clicar em **Salvar** (ou `Ctrl+Enter`). **Cancelar** (ou `Esc`) descarta. Apenas uma licenca fica em edicao por vez, e o painel pede confirmacao antes de descartar alteracoes nao salvas. A tabela de atividades continua editavel diretamente.
 
+### Atividades, prazos e subatividades
+
+- A tabela **Atividades / etapas** tem as colunas **Data** (a data de referencia usada no Gantt, no calendario e na planilha), **Inicio** e **Fim**. A data fim nao pode ser anterior a de inicio.
+- **Alerta de prazo:** uma atividade (ou subatividade) com **Fim** no passado e status diferente de `Done`/`N/A` fica destacada em vermelho com o selo **⚠ Atrasada ha X dias**. O cabecalho do card mostra **⚠ N atividades fora do prazo**, mesmo com o card fechado (passe o mouse para ver quais). O relatorio inclui essas atividades em "Atividades travadas ou em atraso".
+- **Subatividades:** clique em **▸ Subatividades** abaixo do nome da atividade para abrir a lista. Cada subatividade tem nome, responsavel, status, inicio e fim. Quando a atividade tem subatividades, o status dela passa a ser calculado: `Done` quando todas estao concluidas (ou `N/A`), `Stuck` se alguma estiver travada, `Working on it` se alguma ja comecou. O botao mostra o progresso (ex.: "Subatividades 2/5").
+- **Concluir etapa** no fluxo tambem conclui as subatividades pendentes; **Iniciar novo ciclo** as reabre.
+
 Dentro da licenca, o perfil da unidade aparece resumido, com o link **Ver/editar perfil da unidade →**. O perfil so e editado na pagina da unidade.
 
 No formulario **+ Nova licenca**, o ID e gerado automaticamente (proximo `L-NNN` livre) e pode ser alterado em **alterar**. Unidade, tipo de licenca, orgao emissor e status sao obrigatorios; os erros aparecem no proprio formulario.
