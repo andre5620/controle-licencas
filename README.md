@@ -34,7 +34,7 @@ Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e d
 
 ### Navegacao
 
-- **Abas de visao:** logo abaixo do cabecalho ficam as abas **Unidades · Licencas · Calendario · Gantt** (setas do teclado trocam de aba). A aba aparece no endereco (`#view=unidades`, `#view=licencas`, `#view=calendario`, `#view=gantt`), funciona com Voltar/Avancar e pode ser compartilhada. Os enderecos antigos `#units`, `#licenses` e `#calendar` continuam aceitos. Sem aba no endereco, o painel abre na ultima aba usada neste navegador (apenas preferencia de interface).
+- **Abas de visao:** logo abaixo do cabecalho ficam as abas **Unidades · Licencas · Calendario · Gantt · Indicadores** (setas do teclado trocam de aba). A aba aparece no endereco (`#view=unidades`, `#view=licencas`, `#view=calendario`, `#view=gantt`, `#view=indicadores`), funciona com Voltar/Avancar e pode ser compartilhada. Os enderecos antigos `#units`, `#licenses` e `#calendar` continuam aceitos. Sem aba no endereco, o painel abre na ultima aba usada neste navegador (apenas preferencia de interface).
 - **Requer acao:** na aba Licencas, com a ordem padrao **Urgencia**, a lista e dividida em "Requer acao" (vencidas, dentro da janela de renovacao ou risco alto em aberto) e "Demais licencas". As vencidas aparecem primeiro, da mais atrasada para a menos. O seletor **Ordenar** tambem oferece Vencimento, ID e Unidade, sem agrupamento.
 - **Unidades:** os cards sao ordenados pela unidade com mais licencas que requerem acao e mostram o selo "X requerem acao".
 - **Indicadores clicaveis:** clicar em um indicador (Obtidas, Pendentes, Vencidas, Risco alto) filtra a lista de licencas; clicar de novo, em "Licencas no escopo" ou em **Limpar filtros** remove o filtro. Ele se combina com os filtros de unidade, status, risco e busca. Na pagina da unidade, os indicadores filtram "Licencas da unidade".
@@ -42,6 +42,22 @@ Os perfis de unidade exibem informacoes gerais, caracteristicas operacionais e d
 - **Cabecalho:** ficam visiveis **+ Nova licenca**, **+ Nova unidade**, **Exportar relatorio** e o indicador de sincronizacao. **Sincronizar**, **Carregar servidor**, **Importar dados locais**, **Restaurar dados** e **Sair** ficam no menu **⋯ Mais**.
 - **Faixa de sincronizacao:** com alteracoes pendentes, uma faixa abaixo do cabecalho avisa que elas ainda nao estao disponiveis para a equipe e oferece **Sincronizar agora**. Em caso de erro, a faixa fica vermelha com **Tentar novamente** (ou **Carregar servidor**, em conflito). No modo local, a faixa informa que os dados ficam so neste navegador.
 - **Celular (ate 640px):** cabecalho compacto com as acoes no menu **⋯ Mais**, indicadores em faixa com rolagem lateral, filtros recolhidos em **Filtros (n)** e **+ Nova licenca** como botao flutuante.
+
+### Indicadores de desempenho (POP, secao 7)
+
+A aba **Indicadores** calcula, sobre as licencas no escopo dos filtros e com a situacao de hoje:
+
+| Indicador | Formula | Meta |
+|---|---|---|
+| Indice de conformidade legal | (obtidas e vigentes + dispensadas) / aplicaveis | 100% |
+| Licencas vencidas | licencas com vencimento anterior a hoje | 0 |
+| Renovacao em risco | licencas vigentes dentro da janela de renovacao sem atividade iniciada na janela (ou status Em analise) | 0 |
+| Risco alto em aberto | risco alto e status diferente de Obtida/Dispensada/Nao aplicavel | 0 |
+| Atividades concluidas no prazo | concluidas ate a data Fim / concluidas com data Fim e data de conclusao | >= 90% |
+| Atraso medio das atividades | media de dias de atraso das atividades em aberto fora do prazo | 0 dia |
+| Avanco do fluxo por unidade | atividades de etapas do fluxo concluidas / total | acompanhamento |
+
+Atividades com subatividades sao medidas pelas subatividades, para nao contar em dobro. Metas e faixas de semaforo ficam em `INDICATORS` (`js/app.js`). Clique em um indicador para ver o que compoe o resultado; a ficha tecnica fica no fim da aba. O relatorio exportado inclui os indicadores.
 
 ### Edicao das licencas
 
