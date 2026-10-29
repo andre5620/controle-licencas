@@ -4,7 +4,7 @@ const SPREADSHEET_REFERENCE = window.SPREADSHEET_REFERENCE || null;
 const SPREADSHEET_LICENSES = window.SPREADSHEET_LICENSES || {};
 const PROCESS_FLOWS = window.PROCESS_FLOWS || {};
 
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.15.0';
 const LICENSE_STATUSES = ['Pendente','Em análise','Condicionada','Obtida','Dispensada','Indeferida','Não aplicável'];
 const OPEN_STATUSES = ['Pendente','Em análise','Condicionada','Indeferida'];
 const ACTIVITY_STATUSES = ['Não iniciado','Working on it','Stuck','Done','N/A'];
@@ -383,7 +383,8 @@ function importSpreadsheetActivities(lic, def, spec){
     .filter(activity=>def.nos.some(node=>node.id === activity.etapaPadraoId && !node.decisao));
   const covered = new Set(imported.map(activity=>activity.etapaPadraoId));
   lic.activities = (lic.activities || []).filter(activity=>!(covered.has(activity.etapaPadraoId)
-    && activity.id === genericFlowActivityId(lic, activity.etapaPadraoId) && activity.status === 'Não iniciado'));
+    && activity.id === genericFlowActivityId(lic, activity.etapaPadraoId) && activity.status === 'Não iniciado'
+    && !(activity.subatividades || []).length));
   imported.forEach(activity=>insertFlowActivity(lic, def, activity));
   def.nos.filter(node=>!node.decisao && !node.condicional).forEach(node=>ensureFlowActivity(lic, def, node));
   /* Etapas genéricas anteriores a uma etapa já concluída na planilha não podem travar o fluxo. */
@@ -393,7 +394,8 @@ function importSpreadsheetActivities(lic, def, spec){
   lic.activities.forEach(activity=>{
     if(activity.id !== genericFlowActivityId(lic, activity.etapaPadraoId) || activity.status !== 'Não iniciado') return;
     if(order.indexOf(activity.etapaPadraoId) >= furthest) return;
-    Object.assign(activity, {status: 'Done', observacao: activity.observacao || 'Considerada concluída na importação da planilha'});
+    completeActivity(activity);
+    activity.observacao = activity.observacao || 'Considerada concluída na importação da planilha';
   });
   lic.fluxo.decisoes = lic.fluxo.decisoes || {};
   const preset = [['LIC-G1', 'sim'], ['LIC-G2', 'exigida']].filter(([gate])=>!lic.fluxo.decisoes[gate]);
@@ -408,6 +410,16 @@ function importSpreadsheetFlow(lic){
   if(lic.fluxo?.tipo !== 'licenca' || !spec) throw new Error('Não há planilha da unidade para esta licença.');
   if(lic.fluxo.planilhaImportada) throw new Error('As atividades da planilha já foram importadas.');
   importSpreadsheetActivities(lic, PROCESS_FLOWS.licenca, spec);
+}
+
+/* Conclui a atividade junto com as subatividades abertas, para o status derivado não voltar atrás. */
+function completeActivity(activity){
+  activity.status = 'Done';
+  activity.dataRealizada = todayStr();
+  (activity.subatividades || []).filter(sub=>!STEP_DONE.includes(sub.status)).forEach(sub=>{
+    sub.status = 'Done';
+    sub.dataRealizada = todayStr();
+  });
 }
 
 function resetFlowActivity(activity){
@@ -453,14 +465,7 @@ function completeFlowStep(lic, stepId){
     throw new Error('Esta etapa não é mais a etapa atual. Carregue o servidor.');
   }
   ensureFlowActivity(lic, flow.def, node);
-  flowActivities(lic, node.id).filter(activity=>!STEP_DONE.includes(activity.status)).forEach(activity=>{
-    activity.status = 'Done';
-    activity.dataRealizada = todayStr();
-    (activity.subatividades || []).filter(sub=>!STEP_DONE.includes(sub.status)).forEach(sub=>{
-      sub.status = 'Done';
-      sub.dataRealizada = todayStr();
-    });
-  });
+  flowActivities(lic, node.id).filter(activity=>!STEP_DONE.includes(activity.status)).forEach(completeActivity);
   syncFlowStatus(lic, stepId);
 }
 
@@ -1032,16 +1037,19 @@ function render(){
   const unitPanel = document.getElementById('unitPanel');
   const gantt = document.getElementById('ganttView');
   const calendar = document.getElementById('calendarPanel');
+  const indicators = document.getElementById('indicatorsPanel');
   const unitId = activePanel === 'unit' ? currentUnitId() : null;
   const unitDetail = Boolean(unitId);
   document.getElementById('dashboardFilters').hidden = unitDetail;
-  document.getElementById('kpiRow').hidden = unitDetail;
+  document.getElementById('kpiRow').hidden = unitDetail || activePanel === 'indicators';
   if(activePanel !== 'license' || activeView !== 'list') root.innerHTML = '';
   if(activePanel !== 'unit') unitPanel.innerHTML = '';
   if(activePanel !== 'calendar') calendar.innerHTML = '';
+  if(activePanel !== 'indicators') indicators.innerHTML = '';
   root.hidden = activePanel !== 'license' || activeView !== 'list';
   unitPanel.hidden = activePanel !== 'unit';
   calendar.hidden = activePanel !== 'calendar';
+  indicators.hidden = activePanel !== 'indicators';
   gantt.hidden = activePanel !== 'license' || activeView !== 'gantt';
   document.getElementById('fOrdem').hidden = activePanel !== 'license' || activeView !== 'list';
   updateFilterCount();
@@ -1053,6 +1061,10 @@ function render(){
   });
   if(activePanel === 'calendar'){
     renderCalendar(list);
+    return;
+  }
+  if(activePanel === 'indicators'){
+    renderIndicators(list);
     return;
   }
   if(activePanel === 'unit'){
@@ -1098,15 +1110,17 @@ const VIEW_ROUTES = {
   unidades: {panel: 'unit'},
   licencas: {panel: 'license', view: 'list'},
   calendario: {panel: 'calendar'},
-  gantt: {panel: 'license', view: 'gantt'}
+  gantt: {panel: 'license', view: 'gantt'},
+  indicadores: {panel: 'indicators'}
 };
 const LEGACY_VIEW_HASHES = {'#units': 'unidades', '#licenses': 'licencas', '#calendar': 'calendario'};
-const VIEW_TABS = [['btnUnitPanel', 'unidades'], ['btnLicensePanel', 'licencas'], ['btnCalendarPanel', 'calendario'], ['btnGanttView', 'gantt']];
+const VIEW_TABS = [['btnUnitPanel', 'unidades'], ['btnLicensePanel', 'licencas'], ['btnCalendarPanel', 'calendario'], ['btnGanttView', 'gantt'], ['btnIndicatorsPanel', 'indicadores']];
 const VIEW_PREFERENCE_KEY = 'licencas-solinftec-ui:view';
 
 function currentViewKey(){
   if(activePanel === 'unit') return 'unidades';
   if(activePanel === 'calendar') return 'calendario';
+  if(activePanel === 'indicators') return 'indicadores';
   return activeView === 'gantt' ? 'gantt' : 'licencas';
 }
 
@@ -1495,6 +1509,232 @@ function renderGantt(list){
     ${rows}
     <div class="gantt-legend"><span><i class="legend-bar"></i>Período da licença</span><span><i class="legend-marker"></i>Atividade</span><span><i></i>Hoje</span></div>
   </div>`;
+}
+
+/* ---------------------------------------------------------------
+   INDICADORES DE DESEMPENHO DO PROCESSO (POP, seção 7)
+   Calculados sobre as licenças no escopo dos filtros, com o estado atual da base.
+--------------------------------------------------------------- */
+const IND_STATUS_LABEL = {ok: 'Dentro da meta', alerta: 'Atenção', critico: 'Fora da meta', info: 'Acompanhamento', vazio: 'Sem dados'};
+const percent = (num, den)=>den ? Math.round(num / den * 1000) / 10 : null;
+const fmtPercent = value=>value === null ? '—' : `${String(value).replace('.', ',')}%`;
+const VALID_LICENSE_STATUSES = ['Obtida', 'Condicionada'];
+const licenseIsExpired = lic=>Boolean(lic.vencimento) && daysUntil(lic.vencimento) < 0;
+const highRiskOpen = lic=>(lic.risco || '').toLowerCase() === 'alto' && !SETTLED_STATUSES.includes(lic.status);
+
+/* Itens executáveis: as subatividades quando existem; senão, a própria atividade (evita contar em dobro). */
+function leafActivities(lic){
+  const items = [];
+  (lic.activities || []).forEach(activity=>{
+    const subs = activity.subatividades || [];
+    if(subs.length) subs.forEach(sub=>items.push({lic, item: sub, nome: `${activity.name} › ${sub.name}`}));
+    else items.push({lic, item: activity, nome: activity.name});
+  });
+  return items;
+}
+
+/* Renovação iniciada: licença em análise ou alguma atividade em andamento/concluída desde a abertura da janela. */
+function renewalStarted(lic, abertura){
+  if(lic.status === 'Em análise') return true;
+  return leafActivities(lic).some(({item})=>(['Working on it', 'Stuck'].includes(item.status)
+      && (!item.dataInicio || item.dataInicio >= abertura))
+    || (item.status === 'Done' && (item.dataRealizada || '') >= abertura));
+}
+
+const INDICATORS = [
+  {
+    id: 'conformidade', nome: 'Índice de conformidade legal',
+    objetivo: 'Medir a parcela das licenças aplicáveis que estão regulares (obtidas e vigentes, ou dispensadas).',
+    formula: '(licenças obtidas e vigentes + dispensadas) ÷ licenças aplicáveis × 100',
+    unidade: '%', meta: '100%', fonte: 'Status e vencimento das licenças',
+    compute(list){
+      const aplicaveis = list.filter(lic=>lic.status !== 'Não aplicável');
+      const conformes = aplicaveis.filter(lic=>lic.status === 'Dispensada' || (lic.status === 'Obtida' && !licenseIsExpired(lic)));
+      const value = percent(conformes.length, aplicaveis.length);
+      const ids = new Set(conformes.map(lic=>lic.id));
+      return {
+        value, display: fmtPercent(value), sub: `${conformes.length} de ${aplicaveis.length} licenças`,
+        status: value === null ? 'vazio' : value >= 100 ? 'ok' : value >= 90 ? 'alerta' : 'critico',
+        detailTitle: 'Licenças não conformes',
+        rows: aplicaveis.filter(lic=>!ids.has(lic.id)).map(lic=>({lic,
+          motivo: licenseIsExpired(lic) ? `Vencida há ${humanSpan(-daysUntil(lic.vencimento))}` : `Status: ${lic.status || 'não informado'}`}))
+      };
+    }
+  },
+  {
+    id: 'vencidas', nome: 'Licenças vencidas',
+    objetivo: 'Identificar licenças com data de vencimento já ultrapassada.',
+    formula: 'nº de licenças com vencimento anterior a hoje',
+    unidade: 'nº', meta: '0', fonte: 'Vencimento das licenças',
+    compute(list){
+      const rows = list.filter(licenseIsExpired)
+        .sort((a, b)=>a.vencimento.localeCompare(b.vencimento))
+        .map(lic=>({lic, motivo: `Venceu em ${fmtDate(lic.vencimento)} (há ${humanSpan(-daysUntil(lic.vencimento))})`}));
+      return {value: rows.length, display: String(rows.length), sub: 'licenças', status: rows.length ? 'critico' : 'ok',
+        detailTitle: 'Licenças vencidas', rows};
+    }
+  },
+  {
+    id: 'renovacao', nome: 'Renovação em risco',
+    objetivo: 'Antecipar vencimentos: licenças dentro da janela de renovação sem processo iniciado.',
+    formula: 'nº de licenças vigentes dentro da janela de renovação (120 dias por padrão) sem atividade iniciada na janela',
+    unidade: 'nº', meta: '0', fonte: 'Vencimento, janela de renovação e atividades',
+    compute(list){
+      const rows = [];
+      list.forEach(lic=>{
+        const span = renewalWindow(lic);
+        if(!VALID_LICENSE_STATUSES.includes(lic.status) || !span || licenseIsExpired(lic)
+          || span.abertura > todayStr() || renewalStarted(lic, span.abertura)) return;
+        rows.push({lic, dias: daysUntil(lic.vencimento),
+          motivo: `Vence em ${humanSpan(daysUntil(lic.vencimento))}; janela aberta em ${fmtDate(span.abertura)}`});
+      });
+      rows.sort((a, b)=>a.dias - b.dias);
+      return {value: rows.length, display: String(rows.length), sub: 'licenças', status: rows.length ? 'alerta' : 'ok',
+        detailTitle: 'Licenças na janela sem renovação iniciada', rows};
+    }
+  },
+  {
+    id: 'risco', nome: 'Risco alto em aberto',
+    objetivo: 'Acompanhar a exposição a licenças de risco alto ainda não regularizadas.',
+    formula: 'nº de licenças com risco alto e status diferente de Obtida, Dispensada ou Não aplicável',
+    unidade: 'nº', meta: '0', fonte: 'Risco e status das licenças',
+    compute(list){
+      const rows = list.filter(highRiskOpen).map(lic=>({lic, motivo: `Status: ${lic.status || 'não informado'}`}));
+      return {value: rows.length, display: String(rows.length), sub: 'licenças', status: rows.length ? 'critico' : 'ok',
+        detailTitle: 'Licenças de risco alto em aberto', rows};
+    }
+  },
+  {
+    id: 'prazo', nome: 'Atividades concluídas no prazo',
+    objetivo: 'Medir o cumprimento dos prazos planejados das atividades e subatividades.',
+    formula: 'concluídas até a data Fim ÷ concluídas com data Fim e data de conclusão registradas × 100',
+    unidade: '%', meta: '≥ 90%', fonte: 'Atividades e subatividades (data Fim e data de conclusão)',
+    compute(list){
+      const done = list.flatMap(leafActivities).filter(({item})=>item.status === 'Done' && item.dataFim);
+      const measured = done.filter(({item})=>item.dataRealizada);
+      const late = measured.filter(({item})=>item.dataRealizada > item.dataFim);
+      const value = percent(measured.length - late.length, measured.length);
+      const semData = done.length - measured.length;
+      return {
+        value, display: fmtPercent(value),
+        sub: measured.length ? `${measured.length - late.length} de ${measured.length} atividades` : 'nenhuma atividade concluída com data Fim',
+        status: value === null ? 'vazio' : value >= 90 ? 'ok' : value >= 75 ? 'alerta' : 'critico',
+        detailTitle: 'Atividades concluídas após a data Fim',
+        note: semData ? `${semData} atividade(s) concluída(s) sem data de conclusão registrada ficaram fora do cálculo.` : '',
+        rows: late.map(({lic, item, nome})=>({lic, nome,
+          motivo: `Fim ${fmtDate(item.dataFim)} · concluída em ${fmtDate(item.dataRealizada)}`}))
+      };
+    }
+  },
+  {
+    id: 'atraso', nome: 'Atraso médio das atividades',
+    objetivo: 'Dimensionar o atraso das atividades em aberto com data Fim já ultrapassada.',
+    formula: 'soma dos dias de atraso ÷ nº de atividades em aberto fora do prazo',
+    unidade: 'dias', meta: '0 dia', fonte: 'Atividades e subatividades (data Fim e status)',
+    compute(list){
+      const late = list.flatMap(leafActivities).map(entry=>({...entry, dias: activityLateDays(entry.item)})).filter(entry=>entry.dias);
+      const value = late.length ? Math.round(late.reduce((sum, entry)=>sum + entry.dias, 0) / late.length) : 0;
+      late.sort((a, b)=>b.dias - a.dias);
+      return {
+        value, display: `${value} ${value === 1 ? 'dia' : 'dias'}`,
+        sub: late.length ? `${late.length} atividade(s) fora do prazo` : 'nenhuma atividade em atraso',
+        status: !late.length ? 'ok' : value <= 15 ? 'alerta' : 'critico',
+        detailTitle: 'Atividades em aberto fora do prazo',
+        rows: late.map(({lic, item, nome, dias})=>({lic, nome,
+          motivo: `Atrasada há ${humanSpan(dias)} (Fim ${fmtDate(item.dataFim)}) · ${item.status}`}))
+      };
+    }
+  },
+  {
+    id: 'avanco', nome: 'Avanço do fluxo por unidade',
+    objetivo: 'Acompanhar a execução das etapas do fluxograma de Licenças e Outorgas em cada unidade.',
+    formula: 'atividades de etapas do fluxo concluídas (Done ou N/A) ÷ total de atividades de etapas do fluxo × 100',
+    unidade: '%', meta: 'Acompanhamento', fonte: 'Atividades vinculadas ao fluxograma',
+    compute(list){
+      const byUnit = new Map();
+      list.filter(lic=>lic.fluxo).forEach(lic=>{
+        const steps = (lic.activities || []).filter(activity=>activity.etapaPadraoId);
+        if(!steps.length) return;
+        const entry = byUnit.get(lic.unidade) || {unidade: lic.unidade, done: 0, total: 0, licencas: 0};
+        entry.done += steps.filter(activity=>STEP_DONE.includes(activity.status)).length;
+        entry.total += steps.length;
+        entry.licencas += 1;
+        byUnit.set(lic.unidade, entry);
+      });
+      const units = [...byUnit.values()].map(entry=>({...entry, pct: percent(entry.done, entry.total)}))
+        .sort((a, b)=>a.pct - b.pct || a.unidade.localeCompare(b.unidade, 'pt-BR'));
+      const done = units.reduce((sum, entry)=>sum + entry.done, 0);
+      const total = units.reduce((sum, entry)=>sum + entry.total, 0);
+      const value = percent(done, total);
+      return {value, display: fmtPercent(value), sub: total ? `${done} de ${total} etapas · ${units.length} unidade(s)` : 'nenhuma licença com fluxo aplicado',
+        status: value === null ? 'vazio' : 'info', detailTitle: 'Avanço por unidade', units};
+    }
+  }
+];
+
+const INDICATOR_COMMON = {periodicidade: 'Mensal', responsavel: 'Sustentabilidade'};
+let selectedIndicator = 'conformidade';
+
+function computeIndicators(list){
+  return INDICATORS.map(def=>({...INDICATOR_COMMON, ...def, result: def.compute(list)}));
+}
+
+function renderIndicatorDetail(ind){
+  const r = ind.result;
+  let body;
+  if(ind.id === 'avanco'){
+    body = r.units.length ? `<ul class="ind-bars">${r.units.map(entry=>`<li>
+        <span class="ind-bar-label">${esc(entry.unidade)} <small>${entry.licencas} licença(s)</small></span>
+        <span class="ind-bar-track" role="img" aria-label="${esc(entry.unidade)}: ${fmtPercent(entry.pct)}"><span class="ind-bar-fill" style="width:${entry.pct}%"></span></span>
+        <span class="ind-bar-value">${fmtPercent(entry.pct)} <small>${entry.done}/${entry.total}</small></span>
+      </li>`).join('')}</ul>`
+      : '<p class="ind-empty">Nenhuma licença no escopo segue o fluxograma.</p>';
+  }else{
+    body = r.rows.length ? `<table class="ind-table">
+        <thead><tr><th>Licença</th><th>Unidade</th>${r.rows.some(row=>row.nome) ? '<th>Atividade</th>' : ''}<th>Situação</th></tr></thead>
+        <tbody>${r.rows.map(row=>`<tr>
+          <td><button type="button" class="link-btn" data-open-lic="${esc(row.lic.id)}">${esc(row.lic.id)}</button> <span class="ind-muted">${esc(row.lic.tipoLicenca || '')}</span></td>
+          <td>${esc(row.lic.unidade)}</td>${r.rows.some(item=>item.nome) ? `<td>${esc(row.nome || '—')}</td>` : ''}<td>${esc(row.motivo)}</td>
+        </tr>`).join('')}</tbody></table>`
+      : '<p class="ind-empty">Nenhum item fora da meta ✓</p>';
+  }
+  return `<section class="ind-detail" aria-labelledby="indDetailTitle">
+    <h2 id="indDetailTitle">${esc(r.detailTitle)} <span class="ind-muted">· ${esc(ind.nome)}</span></h2>
+    <p class="ind-formula"><b>Fórmula:</b> ${esc(ind.formula)} · <b>Meta:</b> ${esc(ind.meta)}</p>
+    ${r.note ? `<p class="ind-note">${esc(r.note)}</p>` : ''}
+    ${body}
+  </section>`;
+}
+
+function renderIndicators(list){
+  const root = document.getElementById('indicatorsPanel');
+  const indicators = computeIndicators(list);
+  if(!indicators.some(ind=>ind.id === selectedIndicator)) selectedIndicator = indicators[0].id;
+  const selected = indicators.find(ind=>ind.id === selectedIndicator);
+  root.innerHTML = `
+    <p class="ind-intro">Indicadores de desempenho do processo (POP, seção 7) calculados sobre as <b>${list.length}</b> licença(s) no escopo dos filtros, com a situação de hoje (${fmtDate(todayStr())}). Clique em um indicador para ver o que compõe o resultado.</p>
+    <div class="ind-grid">${indicators.map(ind=>`
+      <button type="button" class="ind-card ind-${ind.result.status}" data-ind="${ind.id}" aria-pressed="${ind.id === selectedIndicator}">
+        <span class="ind-name">${esc(ind.nome)}</span>
+        <span class="ind-value">${esc(ind.result.display)}</span>
+        <span class="ind-sub">${esc(ind.result.sub)}</span>
+        <span class="ind-foot"><span class="ind-chip">${IND_STATUS_LABEL[ind.result.status]}</span><span>Meta: ${esc(ind.meta)}</span></span>
+      </button>`).join('')}
+    </div>
+    ${renderIndicatorDetail(selected)}
+    <details class="ind-sheet">
+      <summary>Ficha técnica dos indicadores</summary>
+      <div class="ind-sheet-scroll"><table class="ind-table">
+        <thead><tr><th>Indicador</th><th>Objetivo</th><th>Fórmula</th><th>Unidade</th><th>Meta</th><th>Periodicidade</th><th>Fonte</th><th>Responsável</th></tr></thead>
+        <tbody>${indicators.map(ind=>`<tr><td><b>${esc(ind.nome)}</b></td><td>${esc(ind.objetivo)}</td><td>${esc(ind.formula)}</td><td>${esc(ind.unidade)}</td><td>${esc(ind.meta)}</td><td>${esc(ind.periodicidade)}</td><td>${esc(ind.fonte)}</td><td>${esc(ind.responsavel)}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </details>`;
+  root.querySelectorAll('[data-ind]').forEach(button=>button.addEventListener('click', ()=>{
+    selectedIndicator = button.dataset.ind;
+    renderIndicators(list);
+    root.querySelector(`[data-ind="${selectedIndicator}"]`)?.focus();
+  }));
+  root.querySelectorAll('[data-open-lic]').forEach(button=>button.addEventListener('click', ()=>openLicense(button.dataset.openLic)));
 }
 
 function renderCard(lic){
@@ -2620,6 +2860,12 @@ function buildAndPrintReport(){
       <div class="rep-kpi"><b>${altoRisco}</b>Risco alto</div>
       <div class="rep-kpi"><b>${doneActivities}/${totalActivities}</b>Atividades concluídas</div>
     </div>
+
+    <div class="rep-section-title">Indicadores de desempenho do processo</div>
+    <table class="rep-table">
+      <thead><tr><th>Indicador</th><th>Resultado</th><th>Base</th><th>Meta</th><th>Situação</th></tr></thead>
+      <tbody>${computeIndicators(list).map(ind=>`<tr><td>${esc(ind.nome)}</td><td><b>${esc(ind.result.display)}</b></td><td>${esc(ind.result.sub)}</td><td>${esc(ind.meta)}</td><td>${IND_STATUS_LABEL[ind.result.status]}</td></tr>`).join('')}</tbody>
+    </table>
 
     <div class="rep-section-title">Licenças vencidas ou em atraso</div>
     <table class="rep-table">

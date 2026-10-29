@@ -2,6 +2,23 @@
 
 Todas as alterações relevantes deste projeto serão documentadas neste arquivo.
 
+## [1.15.0] - 2026-10-29
+
+### Aba Indicadores (POP, seção 7 — indicadores de desempenho do processo)
+
+- Nova aba **Indicadores** (`#view=indicadores`) com sete indicadores calculados sobre as licenças no escopo dos filtros: índice de conformidade legal, licenças vencidas, renovação em risco, risco alto em aberto, atividades concluídas no prazo, atraso médio das atividades e avanço do fluxo por unidade.
+- Cada indicador mostra resultado, base de cálculo, meta e situação (Dentro da meta, Atenção, Fora da meta, Acompanhamento ou Sem dados).
+- Ao clicar em um indicador, o painel lista as licenças ou atividades que compõem o resultado, com link para a licença; o avanço do fluxo aparece em barras por unidade.
+- Ficha técnica dos indicadores (objetivo, fórmula, unidade, meta, periodicidade, fonte e responsável), no formato pedido pelo POP.
+- Relatório exportado com a seção "Indicadores de desempenho do processo".
+- Os cálculos usam a situação atual da base; não há histórico mensal nem migração SQL.
+- "Renovação em risco" considera só licenças vigentes (Obtida ou Condicionada), e uma atividade iniciada antes da abertura da janela não conta como renovação iniciada.
+
+### Correções
+
+- Importar as atividades da planilha não apaga mais uma etapa genérica que tenha subatividades.
+- Etapas consideradas concluídas na importação da planilha também concluem as subatividades abertas.
+
 ## [1.14.0] - 2026-10-28
 
 ### Prazos e subatividades nas atividades da licença

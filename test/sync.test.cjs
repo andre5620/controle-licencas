@@ -1401,3 +1401,76 @@ test('concluir a etapa conclui as subatividades e o novo ciclo as reabre', ()=>{
   app.run("resetFlowActivity(flowActivity(lic, 'LIC-01'))");
   assert.equal(app.run("flowActivity(lic, 'LIC-01').subatividades.every(sub=>sub.status === 'Não iniciado')"), true);
 });
+
+test('importar a planilha preserva subatividades e conclui as das etapas puladas', async ()=>{
+  const app = await sheetApp();
+  app.run(`var lic = addLicense('L-012', 'Balsas');
+    var saved = SPREADSHEET_REFERENCE.unitFlows; delete SPREADSHEET_REFERENCE.unitFlows;
+    applyFlow(lic, 'licenca');
+    SPREADSHEET_REFERENCE.unitFlows = saved;
+    lic.activities.filter(activity=>activity.id === genericFlowActivityId(lic, activity.etapaPadraoId))
+      .forEach(activity=>{ activity.subatividades = [{id: activity.id + '-S01', name: 'Parte', status: 'Não iniciado'}]; });
+    importSpreadsheetFlow(lic);`);
+  assert.equal(app.run("lic.activities.some(activity=>activity.id === genericFlowActivityId(lic, 'LIC-02') && activity.subatividades.length === 1)"), true);
+  const skipped = "lic.activities.filter(activity=>activity.observacao === 'Considerada concluída na importação da planilha')";
+  assert.ok(app.run(`${skipped}.length`) > 0);
+  assert.equal(app.run(`${skipped}.every(activity=>activity.status === 'Done' && activity.subatividades.every(sub=>sub.status === 'Done'))`), true);
+});
+
+test('indicadores de desempenho calculam conformidade, vencimentos, prazos e avanco do fluxo', ()=>{
+  const app = createApp();
+  app.run(`var day = n=>addDaysIso(todayStr(), n);
+    var list = [
+      {id:'L-1', unidade:'Fábrica', status:'Obtida', risco:'Baixo', vencimento: day(400), activities:[]},
+      {id:'L-2', unidade:'Fábrica', status:'Obtida', risco:'Alto', vencimento: day(-10), activities:[]},
+      {id:'L-3', unidade:'Balsas', status:'Dispensada', activities:[]},
+      {id:'L-4', unidade:'Balsas', status:'Não aplicável', activities:[]},
+      {id:'L-5', unidade:'<b>Sinop</b>', status:'Pendente', risco:'Alto', vencimento: day(30), fluxo:{tipo:'licenca'}, activities:[
+        {name:'Mãe', etapaPadraoId:'LIC-01', status:'Working on it', subatividades:[
+          {name:'No prazo', status:'Done', dataFim: day(-5), dataRealizada: day(-6)},
+          {name:'Atrasada', status:'Done', dataFim: day(-5), dataRealizada: day(-2)},
+          {name:'Sem conclusão', status:'Done', dataFim: day(-5)},
+          {name:'Aberta', status:'Stuck', dataFim: day(-4)}]},
+        {name:'Etapa 2', etapaPadraoId:'LIC-02', status:'Done', dataFim: day(-1), dataRealizada: day(-1)}]},
+      {id:'L-6', unidade:'Balsas', status:'Obtida', risco:'Baixo', vencimento: day(60), activities:[]},
+      {id:'L-7', unidade:'Balsas', status:'Condicionada', risco:'Baixo', vencimento: day(90), activities:[
+        {name:'Protocolo', status:'Working on it', dataInicio: day(-3)}]},
+      {id:'L-8', unidade:'Balsas', status:'Obtida', risco:'Baixo', vencimento: day(50), activities:[
+        {name:'Antiga', status:'Working on it', dataInicio: day(-400)}]}];
+    var ind = Object.fromEntries(computeIndicators(list).map(item=>[item.id, item.result]));`);
+  // Base aplicável: 7 (L-4 sai); conformes: L-1, L-3, L-6, L-8 (L-2 vencida, L-5 pendente, L-7 condicionada).
+  assert.equal(app.run('ind.conformidade.value'), 57.1);
+  assert.equal(app.run('ind.conformidade.display'), '57,1%');
+  assert.equal(app.run('ind.conformidade.status'), 'critico');
+  assert.equal(app.run("ind.vencidas.rows.map(row=>row.lic.id).join()"), 'L-2');
+  // Renovação: só vigentes na janela sem início na janela (L-5 pendente fica fora; L-7 já iniciou; L-8 iniciou antes da janela).
+  assert.equal(app.run("ind.renovacao.rows.map(row=>row.lic.id).join()"), 'L-8,L-6');
+  assert.equal(app.run("ind.risco.rows.map(row=>row.lic.id).join()"), 'L-5');
+  // Prazo mede as subatividades, não a mãe: 2 no prazo (sub + Etapa 2) de 3 medidas; 1 sem data de conclusão.
+  assert.equal(app.run('ind.prazo.value'), 66.7);
+  assert.match(app.run('ind.prazo.note'), /^1 atividade/);
+  assert.equal(app.run("ind.prazo.rows.map(row=>row.nome).join()"), 'Mãe › Atrasada');
+  assert.equal(app.run('ind.atraso.value'), 4);
+  assert.equal(app.run('ind.atraso.status'), 'alerta');
+  assert.equal(app.run('ind.avanco.value'), 50);
+  assert.equal(app.run('ind.avanco.status'), 'info');
+  assert.equal(app.run("computeIndicators([]).find(item=>item.id === 'conformidade').result.status"), 'vazio');
+
+  app.run("selectedIndicator = 'avanco'; renderIndicators(list);");
+  let html = app.element('indicatorsPanel').innerHTML;
+  assert.match(html, /data-ind="avanco" aria-pressed="true"/);
+  assert.match(html, /&lt;b&gt;Sinop&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>Sinop<\/b>/);
+  assert.match(html, /Ficha técnica dos indicadores/);
+  app.run("selectedIndicator = 'prazo'; renderIndicators(list);");
+  html = app.element('indicatorsPanel').innerHTML;
+  assert.match(html, /data-open-lic="L-5"/);
+  assert.match(html, /Mãe › Atrasada/);
+});
+
+test('aba indicadores tem rota propria no endereco', ()=>{
+  const app = createApp();
+  const route = hash=>app.run(`navigatePanel(${JSON.stringify(hash)}); [activePanel, currentViewKey()].join()`);
+  assert.equal(route('#view=indicadores'), 'indicators,indicadores');
+  assert.equal(route('#view=licencas'), 'license,licencas');
+});
